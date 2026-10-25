@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "stock (no root) or ksu (SukiSU builtin)"
+        description: "stock (no root), ksu (SukiSU builtin), or susfs (SukiSU + SUSFS)"
         required: true
         default: "stock"
         type: choice
         options:
           - stock
           - ksu
+          - susfs
       target:
         description: "device target"
         required: true
