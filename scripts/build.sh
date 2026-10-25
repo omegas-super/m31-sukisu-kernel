@@ -123,6 +123,11 @@ elif [ "$MODE" = "ksu" ]; then
   python3 "$SCRIPT_DIR/patch_hooks.py" "$PWD" ksu
 fi
 
+if [ "$MODE" != "stock" ]; then
+  log "Applying M31 performance tuning"
+  python3 "$SCRIPT_DIR/perf_tune.py" "$PWD"
+fi
+
 log "Building target=$TARGET mode=$MODE"
 python3 build_kernel.py --target "$TARGET"
 

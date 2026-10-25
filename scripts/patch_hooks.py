@@ -55,7 +55,8 @@ PATCHES = [
         "anchor": "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,",
         "call_anchor": "\t/* We only trust the superuser with rebooting the system. */",
         "decl": "extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);",
-        "call": "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);",
+        "call": """	if (ksu_handle_sys_reboot(magic1, magic2, cmd, &arg) == 0 && magic1 != LINUX_REBOOT_MAGIC1)
+		return 0;""",
         "marker": "ksu_handle_sys_reboot(magic1",
     },
     {
