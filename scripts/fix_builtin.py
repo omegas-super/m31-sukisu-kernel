@@ -88,6 +88,40 @@ FIXES = [
         "    (void)pol;\n"
         "    (void)old_pol;",
     ),
+    (
+        "policy/feature.c",
+        "    [KSU_FEATURE_SELINUX_HIDE] = \"selinux_hide\",",
+        "#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n"
+        "    [KSU_FEATURE_SELINUX_HIDE] = \"selinux_hide\",\n"
+        "#endif",
+    ),
+    (
+        "runtime/ksud.c",
+        "    ksu_selinux_hide_handle_post_fs_data();",
+        "#if defined(CONFIG_KSU_SUSFS) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n"
+        "    ksu_selinux_hide_handle_post_fs_data();\n"
+        "#endif",
+    ),
+    (
+        "runtime/ksud.c",
+        "                ksu_selinux_hide_handle_second_stage();",
+        "#if defined(CONFIG_KSU_SUSFS) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n"
+        "                ksu_selinux_hide_handle_second_stage();\n"
+        "#endif",
+    ),
+    (
+        "runtime/ksud.c",
+        "#endif\n            ksu_selinux_hide_handle_second_stage();",
+        "#endif\n#if defined(CONFIG_KSU_SUSFS) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n"
+        "            ksu_selinux_hide_handle_second_stage();\n"
+        "#endif",
+    ),
+    (
+        "ksu_main.c",
+        "#ifdef CONFIG_KSU_SUSFS\n#include \"feature/selinux_hide.c\"",
+        "#if defined(CONFIG_KSU_SUSFS) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)\n"
+        "#include \"feature/selinux_hide.c\"",
+    ),
 ]
 
 
