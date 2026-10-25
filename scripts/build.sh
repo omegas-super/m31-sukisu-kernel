@@ -69,6 +69,9 @@ if [ "$MODE" != "stock" ]; then
   cp -a "$WORK/sukisu/kernel/." drivers/kernelsu/
   python3 "$SCRIPT_DIR/fix_builtin.py" drivers/kernelsu "$MODE"
 
+  log "Porting SELinux hide (id 4) + AVC spoof (id 10003) to 4.14"
+  python3 "$SCRIPT_DIR/fix_selinux_features.py" "$PWD" drivers/kernelsu
+
   grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
     echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
   grep -q 'kernelsu/' drivers/Makefile || \

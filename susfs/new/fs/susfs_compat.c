@@ -18,6 +18,7 @@
 #include <linux/namei.h>
 #include <linux/susfs.h>
 #include <linux/susfs_def.h>
+#include <linux/ksu_selinux_hide.h>
 
 #if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)
 /*
@@ -153,8 +154,18 @@ int susfs_add_sus_map(void __user *user_info)
 
 int susfs_set_avc_log_spoofing(void __user *user_info)
 {
-	/* AVC log spoofing is a 5.10+ SELinux feature. */
-	(void)user_info;
+	u32 enabled;
+
+	/*
+	 * The 4.14 port implements AVC log spoofing natively (no kprobes):
+	 * security/selinux/avc.c calls ksu_slow_avc_audit() and the shared
+	 * toggle lives in security/selinux/ksu_selinux_hide.c.  Accept both
+	 * the SUSFS command (this one) and the KernelSU avc_spoof feature.
+	 */
+	if (copy_from_user(&enabled, user_info, sizeof(enabled)))
+		return -EFAULT;
+
+	ksu_avc_spoof_set(enabled != 0);
 	return 0;
 }
 
@@ -181,6 +192,8 @@ int susfs_get_enabled_features(void __user *user_info)
 #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 	strlcat(info.enabled_features, "open_redirect,", sizeof(info.enabled_features));
 #endif
+	/* Implemented by the 4.14 port (KernelSU feature id 10003 + SUSFS cmd). */
+	strlcat(info.enabled_features, "avc_log_spoofing,", sizeof(info.enabled_features));
 	if (copy_to_user(user_info, &info, sizeof(info)))
 		return -EFAULT;
 	return 0;
