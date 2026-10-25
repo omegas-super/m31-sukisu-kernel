@@ -54,6 +54,7 @@ if [ "$MODE" != "stock" ]; then
   rm -rf drivers/kernelsu
   mkdir -p drivers/kernelsu
   cp -a "$WORK/sukisu/kernel/." drivers/kernelsu/
+  python3 "$SCRIPT_DIR/fix_builtin.py" drivers/kernelsu
 
   grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
     echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
