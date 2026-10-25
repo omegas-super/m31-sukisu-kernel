@@ -84,6 +84,29 @@ def stub_cpu_spoof(root_path: Path) -> None:
     print(f"patched: {path}: cpu_spoof 4.14 stub")
 
 
+def fix_access_ok(root_path: Path) -> None:
+    compat = root_path / "kernel_compat.h"
+    if not compat.exists():
+        sys.exit(f"missing file: {compat}")
+    text = compat.read_text()
+    if "ksu_access_ok" not in text:
+        text += (
+            "\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)\n"
+            "#define ksu_access_ok(addr, size) access_ok(VERIFY_READ, (addr), (size))\n"
+            "#else\n"
+            "#define ksu_access_ok(addr, size) access_ok((addr), (size))\n"
+            "#endif\n"
+        )
+        compat.write_text(text)
+        print(f"patched: {compat}: ksu_access_ok")
+    for path in sorted((root_path / "extension/kpm").glob("*.c")):
+        text = path.read_text()
+        if "access_ok(" not in text:
+            continue
+        path.write_text(text.replace("access_ok(", "ksu_access_ok("))
+        print(f"patched: {path}: access_ok -> ksu_access_ok")
+
+
 def main(root: str) -> int:
     root_path = Path(root)
     for rel, old, new in FIXES:
@@ -97,6 +120,7 @@ def main(root: str) -> int:
         path.write_text(text.replace(old, new, 1))
         print(f"patched: {path}: {old}")
     stub_cpu_spoof(root_path)
+    fix_access_ok(root_path)
     return 0
 
 
