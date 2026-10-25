@@ -42,7 +42,46 @@ FIXES = [
         "#include <linux/ioctl.h>",
         "#include <uapi/asm-generic/ioctl.h>",
     ),
+    (
+        "preinit/common/preinit.h",
+        "#if !defined(CONFIG_ARM64) || !defined(KSU_CAN_USE_JUMP_LABEL)\n"
+        "#define KSU_NO_PREINIT\n"
+        "#endif",
+        "#if !defined(CONFIG_ARM64) || !defined(KSU_CAN_USE_JUMP_LABEL)\n"
+        "#ifndef KSU_NO_PREINIT\n"
+        "#define KSU_NO_PREINIT\n"
+        "#endif\n"
+        "#endif",
+    ),
 ]
+
+
+def stub_cpu_spoof(root_path: Path) -> None:
+    path = root_path / "extension/cpu_spoof.c"
+    if not path.exists():
+        sys.exit(f"missing file: {path}")
+    text = path.read_text()
+    if "LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)" in text:
+        print(f"skip (already stubbed): {path}")
+        return
+    marker = "#if defined(CONFIG_ARM64) || defined(__aarch64__)"
+    if marker not in text:
+        sys.exit(f"cpu_spoof marker not found: {path}")
+    stub = (
+        "#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\n"
+        "/* 4.14: the vDSO datapage API is different; disable CPU spoof. */\n"
+        "int ksu_extension_cpu_spoof_io(u32 id, void __user *raw)\n"
+        "{\n"
+        "\t(void)id;\n"
+        "\t(void)raw;\n"
+        "\treturn -EOPNOTSUPP;\n"
+        "}\n"
+        "#else\n"
+    )
+    text = text.replace(marker, stub + marker, 1)
+    text = text.rstrip() + "\n#endif /* LINUX_VERSION_CODE < 5.10 */\n"
+    path.write_text(text)
+    print(f"patched: {path}: cpu_spoof 4.14 stub")
 
 
 def main(root: str) -> int:
@@ -57,6 +96,7 @@ def main(root: str) -> int:
             continue
         path.write_text(text.replace(old, new, 1))
         print(f"patched: {path}: {old}")
+    stub_cpu_spoof(root_path)
     return 0
 
 
