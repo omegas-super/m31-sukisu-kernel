@@ -773,6 +773,23 @@ def patch_ksu(ksu):
         "init 4.14 selinux_hide + avc_spoof",
     )
 
+    # policy/feature.c and extension/extension.c are both included into the
+    # same translation unit (ksu_main.c) and both used the file-scope names
+    # forced_mask / forced_pending.  That only built while KSU_FEATURE_MAX and
+    # KSU_EXTENSION_MAX produced the same bitmap size; adding the sparse
+    # feature id 10003 changes KSU_FEATURE_MAX to 10004 and exposes the clash.
+    # Rename the extension copies (file-local, no external references).
+    ext_c = ksu / "extension" / "extension.c"
+    if ext_c.is_file():
+        text = read_text(ext_c)
+        if "extension_forced_mask" not in text:
+            text = text.replace("forced_mask", "extension_forced_mask")
+            text = text.replace("forced_pending", "extension_forced_pending")
+            write_text(ext_c, text)
+            print("  [patched] extension.c: rename forced_mask/forced_pending")
+        else:
+            print("  [skipped] extension.c: forced_mask/forced_pending rename")
+
 
 def main(argv):
     if len(argv) != 3:
