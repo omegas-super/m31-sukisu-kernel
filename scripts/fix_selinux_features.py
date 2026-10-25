@@ -102,7 +102,7 @@ KERNEL_SOURCE = r"""// SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/ksu_selinux_hide.h>
 
-#define KSU_HIDE_APP_UID_MIN	10000
+#define KSU_HIDE_APP_UID_MIN	10000U
 #define KSU_SEL_CONTEXT_INO	5	/* enum sel_inos: SEL_CONTEXT */
 #define KSU_SEL_ACCESS_INO	6	/* enum sel_inos: SEL_ACCESS */
 #define KSU_SEL_VALIDATE_TRANS_INO 21	/* enum sel_inos: SEL_VALIDATE_TRANS */
@@ -134,7 +134,7 @@ static bool ksu_is_app_uid(void)
 
 static bool ksu_context_is_dirty(const char *ctx)
 {
-	int i;
+	size_t i;
 
 	if (!ctx)
 		return false;
