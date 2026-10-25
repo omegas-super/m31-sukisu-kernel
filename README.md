@@ -42,7 +42,14 @@ Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification
   `HIDE_KSU_SUSFS_SYMBOLS`; TRY_UMOUNT stays off — no drain path on this port).
 - `scripts/perf_tune.py` — opt-in Performance Edition (`perf=1`): valid big-core floor (1040000),
   schedutil and GPU-threshold tuning, BBR + fq kernel defaults, experimental GPU 1152 MHz row, and
-  two `gpex_clock.c` index guards so an ACPM-rejected GPU row cannot OOB-write at init.
+  two `gpx_clock.c` index guards so an ACPM-rejected GPU row cannot OOB-write at init.
+- `scripts/fix_selinux_features.py` — ports the two SukiSU manager kernel features that upstream
+  only implements for >= 5.10 or via kprobes to this 4.14 tree, without kprobes:
+  **`selinux_hide`** (id 4, "hide SELinux modifications") and **`avc_spoof`** (id 10003, "AVC log
+  spoofing"). It patches `security/selinux/avc.c`, `selinuxfs.c`, `ss/services.c` and
+  `fs/proc/base.c`, adds `security/selinux/ksu_selinux_hide.c`, and registers both feature handlers
+  in the KernelSU tree. The SUSFS `CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING` command drives the same
+  toggle.
 
 ## Layout
 
