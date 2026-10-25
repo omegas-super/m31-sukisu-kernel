@@ -66,8 +66,13 @@
 #define DATA_ADB_NO_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT "/data/adb/susfs_no_auto_add_sus_ksu_default_mount"
 #define DATA_ADB_NO_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT "/data/adb/susfs_no_auto_add_try_umount_for_bind_mount"
 
-/* SukiSU builtin compat: newer SUSFS task-state flags (same task field). */
-#define TASK_STRUCT_UMOUNTED BIT(25)
-#define TASK_STRUCT_UMOUNTED_FOR_ZYGOTE_NEXT BIT(26)
-#define TASK_STRUCT_NO_SU BIT(27)
+/*
+ * SukiSU builtin compat: newer SUSFS task-state flags (same task field).
+ * None of these bits is read by the 4.14 code.  The 4.14 hiding gates test
+ * TASK_STRUCT_NON_ROOT_USER_APP_PROC (BIT(24), above) instead, so do not
+ * write TASK_STRUCT_NO_SU for the "non-root user app" state.
+ */
+#define TASK_STRUCT_UMOUNTED BIT(25)			/* unread on 4.14 */
+#define TASK_STRUCT_UMOUNTED_FOR_ZYGOTE_NEXT BIT(26)	/* unread on 4.14 */
+#define TASK_STRUCT_NO_SU BIT(27)			/* unread on 4.14 */
 #endif // #ifndef KSU_SUSFS_DEF_H

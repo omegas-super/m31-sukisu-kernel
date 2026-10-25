@@ -1,0 +1,16 @@
+# This repo is consumed by Linux (GitHub Actions ubuntu-22.04) and by bash.
+# Force LF in the repository so a Windows checkout (core.autocrlf=true) cannot
+# commit CRLF into build.sh / *.py / Kconfig and break the CI.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.c    text eol=lf
+*.h    text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.patch text eol=lf
+Kconfig  text eol=lf
+Makefile text eol=lf
+.gitignore text eol=lf

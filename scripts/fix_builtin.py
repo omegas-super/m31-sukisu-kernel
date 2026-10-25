@@ -5,7 +5,17 @@ SukiSU's `builtin` branch targets newer kernels; on 4.14 several
 `<linux/...>` headers live under `<uapi/...>` and `static_call.h`
 does not exist at all.  Keep the fixes in one place so the CI build
 is reproducible.
+
+Usage: fix_builtin.py <drivers/kernelsu> [ksu|susfs]
+
+The optional mode selects fixes that only one configuration needs:
+  - susfs: port the SUSFS-branch faccessat/stat hooks to the 4.14
+    user-pointer ABI (the struct-filename variant would oops), and
+    initialise the SUSFS SIDs from the 4.14 apply_kernelsu_rules().
+  - ksu (default): non-SUSFS builds take `struct user_arg_ptr` by value,
+    so USER_ARG_NULL must be dereferenced.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -120,6 +130,67 @@ FIXES = [
 ]
 
 
+# B1: replacement for the two SUSFS-branch hooks in feature/sucompat.c.
+# fs/open.c and fs/stat.c pass `const char __user **` on 4.14; the upstream
+# SUSFS branch instead takes `struct filename **` and dereferences it as a
+# kernel pointer, which oopses on the first stat()/faccessat() (bootloop).
+# This mirrors the non-SUSFS branch's user-pointer handling but keeps the
+# SUSFS branch's su->sh rewrite (no escalation on faccessat/stat).
+SUSFS_SUCOMPAT_ABI_BLOCK = '''static noinline int ksu_sucompat_user_common_susfs(const char __user **filename_user, const char *syscall_name)
+{
+    char path[sizeof(su_path)] = { 0 };
+    long len = ksu_strncpy_from_user_nofault(path, *filename_user, sizeof(path));
+
+    if (unlikely(len <= 0))
+        return -EFAULT;
+
+    if (likely(memcmp(path, su_path, sizeof(su_path))))
+        return 0;
+
+    if (!ksu_su_compat_enabled)
+        return 0;
+
+    if (likely(test_thread_flag(TIF_SECCOMP)))
+        return 0;
+
+    if (!ksu_is_allow_uid_for_current(current_uid().val))
+        return 0;
+
+    if (current_chrooted()) {
+        pr_err("%s: su found but NOT allowed! Because current process is running in chrooted environment\\n", syscall_name);
+        return 0;
+    }
+
+    pr_info("%s: su->sh!\\n", syscall_name);
+    *filename_user = sh_user_path();
+    return 0;
+}
+
+int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *__unused_flags)
+{
+    (void)dfd;
+    (void)mode;
+    (void)__unused_flags;
+
+    if (!filename_user || !*filename_user)
+        return 0;
+
+    return ksu_sucompat_user_common_susfs(filename_user, "faccessat");
+}
+
+int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags)
+{
+    (void)dfd;
+    (void)flags;
+
+    if (!filename_user || !*filename_user)
+        return 0;
+
+    return ksu_sucompat_user_common_susfs(filename_user, "newfstatat");
+}
+'''
+
+
 def stub_cpu_spoof(root_path: Path) -> None:
     path = root_path / "extension/cpu_spoof.c"
     if not path.exists():
@@ -165,9 +236,10 @@ def fix_access_ok(root_path: Path) -> None:
         print(f"patched: {compat}: ksu_access_ok")
     for path in sorted((root_path / "extension/kpm").glob("*.c")):
         text = path.read_text(encoding="utf-8")
-        if "access_ok(" not in text:
+        patched = re.sub(r"(?<!ksu_)access_ok\(", "ksu_access_ok(", text)
+        if patched == text:
             continue
-        path.write_text(text.replace("access_ok(", "ksu_access_ok("), encoding="utf-8")
+        path.write_text(patched, encoding="utf-8")
         print(f"patched: {path}: access_ok -> ksu_access_ok")
 
 
@@ -209,7 +281,121 @@ def fix_susfs_dispatch(root_path: Path) -> None:
     path.write_text(text, encoding="utf-8")
     print(f"patched: {path}: susfs dispatch arg deref")
 
-def main(root: str) -> int:
+def fix_susfs_sucompat_abi(root_path: Path) -> None:
+    """B1: rewrite the SUSFS-branch faccessat/stat hooks to the 4.14 ABI.
+
+    patch_hooks.py calls ksu_handle_faccessat()/ksu_handle_stat() with a
+    `const char __user **` (what fs/open.c and fs/stat.c have), in both
+    modes.  The upstream SUSFS branch of sucompat.c expects
+    `struct filename **` and dereferences it as a kernel pointer, so the
+    SUSFS build would oops on the first stat/faccessat.  Replace only those
+    two functions; the execveat hooks keep `struct filename **` (correct).
+    """
+    path = root_path / "feature" / "sucompat.c"
+    if not path.exists():
+        sys.exit(f"missing file: {path}")
+    text = path.read_text(encoding="utf-8")
+    if "ksu_sucompat_user_common_susfs" in text:
+        print(f"skip (already fixed): {path}: SUSFS faccessat/stat ABI")
+        return
+
+    start_marker = "int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode,"
+    start_count = text.count(start_marker)
+    if start_count != 1:
+        sys.exit(f"{path}: SUSFS faccessat anchor found {start_count} times (expected 1)")
+
+    start = text.index(start_marker)
+    else_pos = text.find("\n#else\n", start)
+    if else_pos < 0:
+        sys.exit(f"{path}: branch '#else' not found after the SUSFS faccessat hook")
+    region = text[start:else_pos]
+
+    for needle, what in (
+        ("int ksu_handle_faccessat(int *dfd, struct filename **filename", "ksu_handle_faccessat"),
+        ("int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)", "ksu_handle_stat"),
+    ):
+        found = region.count(needle)
+        if found != 1:
+            sys.exit(f"{path}: {what} definition found {found} times in SUSFS block (expected 1)")
+    if "ksu_handle_execveat" in region:
+        sys.exit(f"{path}: SUSFS block unexpectedly contains execveat hooks, refusing to patch")
+    if "const char __user **" in region:
+        sys.exit(f"{path}: SUSFS block already uses user pointers, unexpected layout")
+    if not region.endswith("}\n"):
+        sys.exit(f"{path}: SUSFS block does not end with a function brace, refusing to patch")
+
+    text = text[:start] + SUSFS_SUCOMPAT_ABI_BLOCK + text[else_pos:]
+    path.write_text(text, encoding="utf-8")
+    print(f"patched: {path}: SUSFS faccessat/stat -> const char __user **")
+
+
+BATCH_SID_ANCHOR = "    smp_mb();\n    reset_avc_cache();\n#endif\n}"
+BATCH_SID_BLOCK = (
+    "    smp_mb();\n"
+    "    reset_avc_cache();\n"
+    "#ifdef CONFIG_KSU_SUSFS\n"
+    "    susfs_set_batch_sid();\n"
+    "#endif\n"
+    "#endif\n"
+    "}\n"
+)
+
+
+def fix_susfs_batch_sid(root_path: Path) -> None:
+    """B2b: run SUSFS SID initialisation in the 4.14 apply_kernelsu_rules().
+
+    Upstream only calls susfs_set_batch_sid() in the >= 5.10 branch; the 4.14
+    branch never does, so susfs_ksu_sid/zygote_sid/init_sid stay 0 and
+    SUS_MOUNT / OPEN_REDIRECT / setresuid-umount are inert.  Insert the call
+    right before the 4.14 branch's closing #endif (guarded by
+    CONFIG_KSU_SUSFS, matching the 5.10 branch; susfs_set_batch_sid() is
+    declared in kernel/selinux/selinux.h under the same guard).
+    """
+    path = root_path / "selinux" / "rules.c"
+    if not path.exists():
+        sys.exit(f"missing file: {path}")
+    text = path.read_text(encoding="utf-8")
+    calls = text.count("susfs_set_batch_sid();")
+    if calls == 2:
+        print(f"skip (already fixed): {path}: 4.14 susfs_set_batch_sid()")
+        return
+    if calls != 1:
+        sys.exit(f"{path}: susfs_set_batch_sid(); found {calls} times (expected 1 before patching)")
+    anchor_count = text.count(BATCH_SID_ANCHOR)
+    if anchor_count != 1:
+        sys.exit(f"{path}: 4.14 apply_kernelsu_rules tail anchor found {anchor_count} times (expected 1)")
+    text = text.replace(BATCH_SID_ANCHOR, BATCH_SID_BLOCK, 1)
+    path.write_text(text, encoding="utf-8")
+    print(f"patched: {path}: susfs_set_batch_sid() in 4.14 apply_kernelsu_rules")
+
+
+def fix_user_arg_null(root_path: Path) -> None:
+    """B3: non-SUSFS mode passes `struct user_arg_ptr` to sulog by value.
+
+    `ksu_sulog_capture()` takes `const struct user_arg_ptr argv` in the
+    non-SUSFS branch, but USER_ARG_NULL expands to a pointer
+    (user_arg_null_ptr()), which is a type error.  Dereference it.  SUSFS
+    mode takes `struct user_arg_ptr *`, so it must keep the pointer form
+    (hence this fixer is skipped for mode=susfs).
+    """
+    path = root_path / "sulog" / "event.c"
+    if not path.exists():
+        sys.exit(f"missing file: {path}")
+    text = path.read_text(encoding="utf-8")
+    old = "    #define USER_ARG_NULL user_arg_null_ptr()"
+    new = "    #define USER_ARG_NULL (*user_arg_null_ptr())"
+    if new in text:
+        print(f"skip (already fixed): {path}: USER_ARG_NULL")
+        return
+    count = text.count(old)
+    if count != 1:
+        sys.exit(f"{path}: USER_ARG_NULL anchor found {count} times (expected 1)")
+    text = text.replace(old, new, 1)
+    path.write_text(text, encoding="utf-8")
+    print(f"patched: {path}: USER_ARG_NULL -> (*user_arg_null_ptr()) (non-SUSFS mode)")
+
+
+def main(root: str, mode: str = "ksu") -> int:
     root_path = Path(root)
     for rel, old, new in FIXES:
         path = root_path / rel
@@ -219,15 +405,27 @@ def main(root: str) -> int:
         if old not in text:
             print(f"skip (already fixed or absent): {path}: {old}")
             continue
+        if old in new and new in text:
+            print(f"skip (already fixed): {path}: {old}")
+            continue
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
         print(f"patched: {path}: {old}")
     stub_cpu_spoof(root_path)
     fix_susfs_dispatch(root_path)
     fix_access_ok(root_path)
+    fix_susfs_sucompat_abi(root_path)
+    fix_susfs_batch_sid(root_path)
+    if mode == "susfs":
+        print("skip: USER_ARG_NULL fix (SUSFS mode takes struct user_arg_ptr *)")
+    else:
+        fix_user_arg_null(root_path)
     return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        sys.exit("usage: fix_builtin.py <drivers/kernelsu>")
-    sys.exit(main(sys.argv[1]))
+    if len(sys.argv) not in (2, 3):
+        sys.exit("usage: fix_builtin.py <drivers/kernelsu> [ksu|susfs]")
+    mode_arg = sys.argv[2] if len(sys.argv) == 3 else "ksu"
+    if mode_arg not in ("ksu", "susfs"):
+        sys.exit(f"unknown mode: {mode_arg} (expected ksu or susfs)")
+    sys.exit(main(sys.argv[1], mode_arg))

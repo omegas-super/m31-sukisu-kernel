@@ -15,21 +15,56 @@
 #include <linux/uaccess.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
+#include <linux/namei.h>
 #include <linux/susfs.h>
 #include <linux/susfs_def.h>
 
-#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+#if defined(CONFIG_KSU_SUSFS_SUS_MOUNT) || defined(CONFIG_KSU_SUSFS_TRY_UMOUNT)
 /*
- * fs/susfs.c (4.14) still calls the legacy KernelSU umount helper.
- * SukiSU drives the real unmount through ksu_handle_umount(), so keep
- * this path inert instead of duplicating the work.
+ * fs/susfs.c (4.14) calls this legacy KernelSU umount helper from
+ * susfs_try_umount().  The real work is done by the __weak path_umount()
+ * shim in drivers/kernelsu/kernel_compat.c (4.14 has no path_umount()):
+ * it resolves the mount by path and calls sys_umount() with KERNEL_DS.
+ *
+ * path_umount() consumes the reference obtained by kern_path() and calls
+ * path_put() itself (also on its error path), so never path_put() here.
  */
+void ksu_try_umount(const char *mnt, bool check_mnt, int flags, uid_t uid);
+extern int path_umount(struct path *path, int flags);
+
 void ksu_try_umount(const char *mnt, bool check_mnt, int flags, uid_t uid)
 {
-	(void)mnt;
+	struct path path;
+	int err;
+
 	(void)check_mnt;
-	(void)flags;
 	(void)uid;
+
+	if (!mnt)
+		return;
+
+	err = kern_path(mnt, LOOKUP_FOLLOW, &path);
+	if (err)
+		return;
+
+	err = path_umount(&path, flags);
+	if (err)
+		pr_info("susfs: umount '%s' failed: %d\n", mnt, err);
+}
+#endif
+
+#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT
+/*
+ * fs/namespace.c (4.14) calls susfs_try_umount_all() from
+ * susfs_run_try_umount_for_current_mnt_ns(), but fs/susfs.c only provides
+ * the list-based susfs_try_umount().  Bridge the two names so that a
+ * CONFIG_KSU_SUSFS_TRY_UMOUNT build links; both walk LH_TRY_UMOUNT_PATH.
+ */
+void susfs_try_umount_all(uid_t uid);
+
+void susfs_try_umount_all(uid_t uid)
+{
+	susfs_try_umount(uid);
 }
 #endif
 
@@ -50,11 +85,24 @@ bool susfs_ends_with(const char *str, const char *suffix)
 	return !strcmp(str + str_len - suffix_len, suffix);
 }
 
+/*
+ * B2a: the 4.14 SUSFS hiding gates (fs/stat.c, fs/statfs.c, fs/namei.c,
+ * fs/readdir.c, fs/dcache.c, ...) all test
+ * TASK_STRUCT_NON_ROOT_USER_APP_PROC (BIT(24)) on current->susfs_task_state.
+ * SukiSU's newer kernels set that same bit from this helper; writing
+ * TASK_STRUCT_NO_SU (BIT(27)) instead marked nothing the 4.14 code reads,
+ * so sus-path / sus-kstat / statfs hiding was silently inert.
+ */
 void susfs_set_current_proc_no_su(void)
 {
-	current->susfs_task_state |= TASK_STRUCT_NO_SU;
+	current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC;
 }
 
+/*
+ * The two helpers below only feed newer-SUSFS task-state flags.  Nothing in
+ * the 4.14 tree reads BIT(25)/BIT(26) from susfs_task_state, so these writes
+ * are harmless: keep them for SukiSU ABI/behaviour compatibility.
+ */
 void susfs_set_current_proc_umounted(void)
 {
 	current->susfs_task_state |= TASK_STRUCT_UMOUNTED;

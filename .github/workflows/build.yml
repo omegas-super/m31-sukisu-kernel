@@ -23,6 +23,16 @@ on:
           - a51
           - f41
           - m21
+      perf:
+        description: "apply M31 Performance Edition tuning (1) or keep stock values (0)"
+        # optional so existing dispatch scripts that only pass mode/target keep working;
+        # omitted input resolves to the default "0"
+        required: false
+        default: "0"
+        type: choice
+        options:
+          - "0"
+          - "1"
 
 permissions:
   contents: read
@@ -54,12 +64,13 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           TARGET: ${{ inputs.target }}
+          PERF_TUNE: ${{ inputs.perf }}
         run: bash scripts/build.sh "$MODE" "$TARGET"
 
       - name: Upload flashable zip
         uses: actions/upload-artifact@v4
         with:
-          name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}
+          name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}${{ inputs.perf == '1' && '-perf' || '' }}
           path: work/kernel/Everline-AOSP_*.zip
           if-no-files-found: error
           retention-days: 14
