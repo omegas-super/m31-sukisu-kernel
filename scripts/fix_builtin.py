@@ -290,6 +290,7 @@ def fix_susfs_sucompat_abi(root_path: Path) -> None:
     `struct filename **` and dereferences it as a kernel pointer, so the
     SUSFS build would oops on the first stat/faccessat.  Replace only those
     two functions; the execveat hooks keep `struct filename **` (correct).
+    The declarations in feature/sucompat.h must match the new definitions.
     """
     path = root_path / "feature" / "sucompat.c"
     if not path.exists():
@@ -297,36 +298,57 @@ def fix_susfs_sucompat_abi(root_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     if "ksu_sucompat_user_common_susfs" in text:
         print(f"skip (already fixed): {path}: SUSFS faccessat/stat ABI")
+    else:
+        start_marker = "int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode,"
+        start_count = text.count(start_marker)
+        if start_count != 1:
+            sys.exit(f"{path}: SUSFS faccessat anchor found {start_count} times (expected 1)")
+
+        start = text.index(start_marker)
+        else_pos = text.find("\n#else\n", start)
+        if else_pos < 0:
+            sys.exit(f"{path}: branch '#else' not found after the SUSFS faccessat hook")
+        region = text[start:else_pos]
+
+        for needle, what in (
+            ("int ksu_handle_faccessat(int *dfd, struct filename **filename", "ksu_handle_faccessat"),
+            ("int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)", "ksu_handle_stat"),
+        ):
+            found = region.count(needle)
+            if found != 1:
+                sys.exit(f"{path}: {what} definition found {found} times in SUSFS block (expected 1)")
+        if "ksu_handle_execveat" in region:
+            sys.exit(f"{path}: SUSFS block unexpectedly contains execveat hooks, refusing to patch")
+        if "const char __user **" in region:
+            sys.exit(f"{path}: SUSFS block already uses user pointers, unexpected layout")
+        if not region.endswith("}\n"):
+            sys.exit(f"{path}: SUSFS block does not end with a function brace, refusing to patch")
+
+        text = text[:start] + SUSFS_SUCOMPAT_ABI_BLOCK + text[else_pos:]
+        path.write_text(text, encoding="utf-8")
+        print(f"patched: {path}: SUSFS faccessat/stat -> const char __user **")
+
+    # The header declares the two hooks for both branches; without this the
+    # new definitions conflict with the SUSFS-branch declarations and the
+    # build fails with "conflicting types for 'ksu_handle_faccessat'".
+    header = root_path / "feature" / "sucompat.h"
+    if not header.exists():
+        sys.exit(f"missing file: {header}")
+    htext = header.read_text(encoding="utf-8")
+    old_f = "int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode, int *__unused_flags);"
+    old_s = "int ksu_handle_stat(int *dfd, struct filename **filename, int *flags);"
+    new_f = "int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *__unused_flags);"
+    new_s = "int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);"
+    if old_f not in htext and old_s not in htext:
+        print(f"skip (already fixed): {header}: SUSFS faccessat/stat declarations")
         return
-
-    start_marker = "int ksu_handle_faccessat(int *dfd, struct filename **filename, int *mode,"
-    start_count = text.count(start_marker)
-    if start_count != 1:
-        sys.exit(f"{path}: SUSFS faccessat anchor found {start_count} times (expected 1)")
-
-    start = text.index(start_marker)
-    else_pos = text.find("\n#else\n", start)
-    if else_pos < 0:
-        sys.exit(f"{path}: branch '#else' not found after the SUSFS faccessat hook")
-    region = text[start:else_pos]
-
-    for needle, what in (
-        ("int ksu_handle_faccessat(int *dfd, struct filename **filename", "ksu_handle_faccessat"),
-        ("int ksu_handle_stat(int *dfd, struct filename **filename, int *flags)", "ksu_handle_stat"),
-    ):
-        found = region.count(needle)
+    for old, new, what in ((old_f, new_f, "ksu_handle_faccessat"), (old_s, new_s, "ksu_handle_stat")):
+        found = htext.count(old)
         if found != 1:
-            sys.exit(f"{path}: {what} definition found {found} times in SUSFS block (expected 1)")
-    if "ksu_handle_execveat" in region:
-        sys.exit(f"{path}: SUSFS block unexpectedly contains execveat hooks, refusing to patch")
-    if "const char __user **" in region:
-        sys.exit(f"{path}: SUSFS block already uses user pointers, unexpected layout")
-    if not region.endswith("}\n"):
-        sys.exit(f"{path}: SUSFS block does not end with a function brace, refusing to patch")
-
-    text = text[:start] + SUSFS_SUCOMPAT_ABI_BLOCK + text[else_pos:]
-    path.write_text(text, encoding="utf-8")
-    print(f"patched: {path}: SUSFS faccessat/stat -> const char __user **")
+            sys.exit(f"{header}: {what} declaration found {found} times (expected 1)")
+        htext = htext.replace(old, new, 1)
+    header.write_text(htext, encoding="utf-8")
+    print(f"patched: {header}: SUSFS faccessat/stat declarations -> const char __user **")
 
 
 BATCH_SID_ANCHOR = "    smp_mb();\n    reset_avc_cache();\n#endif\n}"
