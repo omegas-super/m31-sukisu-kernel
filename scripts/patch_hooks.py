@@ -94,7 +94,7 @@ def apply(entry):
     if not path.is_file():
         raise SystemExit(f"missing file: {path}")
 
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if entry["marker"] in text:
         print(f"already patched: {entry['file']}")
         return
@@ -112,7 +112,7 @@ def apply(entry):
         require_once(text, entry["call_anchor"], entry["file"], "statement anchor")
         text = text.replace(entry["call_anchor"], call + entry["call_anchor"], 1)
 
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     print(f"patched: {entry['file']}")
 
 

@@ -4,6 +4,7 @@ set -euo pipefail
 MODE="${1:-stock}"
 TARGET="${2:-m31}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SUSFS_DIR="$SCRIPT_DIR/../susfs"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/Parbindar7/android_kernel_samsung_universal9611.git}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-24.0}"
@@ -31,7 +32,7 @@ fi
 
 cd kernel
 
-# --- toolchain: clang-12 + lld-12 + llvm-12 from Ubuntu 22.04 -----------------
+# --- toolchain: clang-12 + lld-12 + llvm-12 from Ubuntu 22.04 ----------------
 if [ ! -x toolchain/bin/clang ]; then
   log "Creating toolchain/bin symlinks"
   mkdir -p toolchain/bin
@@ -73,21 +74,53 @@ if [ "$MODE" != "stock" ]; then
   grep -q 'kernelsu/' drivers/Makefile || \
     echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-  cat >> "arch/arm64/configs/exynos9611-${TARGET}_defconfig" <<'EOF'
-CONFIG_KSU=y
-CONFIG_KSU_FEATURE_ADBROOT=y
-# CONFIG_KSU_DEBUG is not set
-# CONFIG_KPM is not set
-# CONFIG_KSU_SUSFS is not set
-EOF
-
-  log "Applying SukiSU manual hooks"
-  python3 "$SCRIPT_DIR/patch_hooks.py" "$PWD" "$MODE"
+  printf '%s\n' \
+    'CONFIG_KSU=y' \
+    'CONFIG_KSU_FEATURE_ADBROOT=y' \
+    '# CONFIG_KSU_DEBUG is not set' \
+    '# CONFIG_KPM is not set' \
+    >> "arch/arm64/configs/exynos9611-${TARGET}_defconfig"
 fi
 
 if [ "$MODE" = "susfs" ]; then
-  log "SUSFS mode is not wired yet"
-  exit 2
+  log "Applying SUSFS 4.14 kernel patch"
+  # 17 upstream files are patched; 5 of them carry Samsung/RKP
+  # conditionals that the stock patch cannot apply cleanly.  Those 5 are
+  # hand-ported under susfs/overlay and copied over the tree below.
+  git apply --reject "$SUSFS_DIR/50_add_susfs_in_kernel-4.14.patch" || true
+  cp -a "$SUSFS_DIR/overlay/." .
+
+  log "Installing SUSFS core sources + compatibility shim"
+  cp -a "$SUSFS_DIR/new/fs/." fs/
+  cp -a "$SUSFS_DIR/new/include/linux/." include/linux/
+  grep -q 'susfs_compat.o' fs/Makefile || \
+    echo 'obj-$(CONFIG_KSU_SUSFS) += susfs_compat.o' >> fs/Makefile
+  grep -q 'sus_su.o' fs/Makefile || \
+    echo 'obj-$(CONFIG_KSU_SUSFS_SUS_SU) += sus_su.o' >> fs/Makefile
+
+  # Rejects are expected only for the 5 overlaid files; anything else
+  # means the pinned kernel tree drifted.  Show and remove them all.
+  find . -name '*.rej' -not -path './.git/*' -print -delete
+
+  sed -i '/^# CONFIG_KSU_SUSFS is not set$/d' \
+    "arch/arm64/configs/exynos9611-${TARGET}_defconfig"
+  printf '%s\n' \
+    'CONFIG_KSU_SUSFS=y' \
+    'CONFIG_KSU_SUSFS_SUS_PATH=y' \
+    'CONFIG_KSU_SUSFS_SUS_MOUNT=y' \
+    'CONFIG_KSU_SUSFS_SUS_KSTAT=y' \
+    'CONFIG_KSU_SUSFS_SPOOF_UNAME=y' \
+    'CONFIG_KSU_SUSFS_ENABLE_LOG=y' \
+    'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y' \
+    'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y' \
+    '# CONFIG_KSU_SUSFS_SUS_MAP is not set' \
+    >> "arch/arm64/configs/exynos9611-${TARGET}_defconfig"
+
+  log "Applying SukiSU hooks (susfs mode adds setresuid)"
+  python3 "$SCRIPT_DIR/patch_hooks.py" "$PWD" susfs
+elif [ "$MODE" = "ksu" ]; then
+  log "Applying SukiSU manual hooks"
+  python3 "$SCRIPT_DIR/patch_hooks.py" "$PWD" ksu
 fi
 
 log "Building target=$TARGET mode=$MODE"
