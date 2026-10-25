@@ -35,7 +35,7 @@ bool susfs_is_log_enabled __read_mostly = true;
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 static DEFINE_HASHTABLE(SUS_PATH_HLIST, 10);
-static int susfs_update_sus_path_inode(char *target_pathname) {
+static int susfs_update_sus_path_inode(char *target_pathname, unsigned long *target_ino) {
 	struct path p;
 	struct inode *inode = NULL;
 	const char *dev_type;
@@ -45,14 +45,6 @@ static int susfs_update_sus_path_inode(char *target_pathname) {
 		return 1;
 	}
 
-	// - We don't allow paths of which filesystem type is "tmpfs" or "fuse".
-	//   For tmpfs, because its starting inode->i_ino will begin with 1 again,
-	//   so it will cause wrong comparison in function susfs_sus_ino_for_filldir64()
-	//   For fuse, which is almost storage related, sus_path should not handle any paths of
-	//   which filesystem is "fuse" as well, since app can write to "fuse" and lookup files via
-	//   like binder / system API (you can see the uid is changed to 1000)/
-	// - so sus_path should be applied only on read-only filesystem like "erofs" or "f2fs", but not "tmpfs" or "fuse",
-	//   people may rely on HMA for /data isolation instead.
 	dev_type = p.mnt->mnt_sb->s_type->name;
 	if (!strcmp(dev_type, "tmpfs") ||
 		!strcmp(dev_type, "fuse")) {
@@ -69,6 +61,9 @@ static int susfs_update_sus_path_inode(char *target_pathname) {
 		return 1;
 	}
 
+	if (target_ino)
+		*target_ino = inode->i_ino;
+
 	if (!(inode->i_state & INODE_STATE_SUS_PATH)) {
 		spin_lock(&inode->i_lock);
 		inode->i_state |= INODE_STATE_SUS_PATH;
@@ -78,21 +73,29 @@ static int susfs_update_sus_path_inode(char *target_pathname) {
 	return 0;
 }
 
-int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info) {
+int susfs_add_sus_path(void __user *user_info) {
+	struct susfs_uapi_sus_path uinfo;
 	struct st_susfs_sus_path info;
 	struct st_susfs_sus_path_hlist *new_entry, *tmp_entry;
 	struct hlist_node *tmp_node;
 	int bkt;
 	bool update_hlist = false;
 
-	if (copy_from_user(&info, user_info, sizeof(info))) {
+	if (copy_from_user(&uinfo, user_info, sizeof(uinfo))) {
 		SUSFS_LOGE("failed copying from userspace\n");
+		return 1;
+	}
+	memset(&info, 0, sizeof(info));
+	strncpy(info.target_pathname, uinfo.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	info.target_pathname[SUSFS_MAX_LEN_PATHNAME - 1] = '\0';
+	if (!info.target_pathname[0]) {
+		SUSFS_LOGE("target_pathname is an empty string\n");
 		return 1;
 	}
 
 	spin_lock(&susfs_spin_lock);
 	hash_for_each_safe(SUS_PATH_HLIST, bkt, tmp_node, tmp_entry, node) {
-	if (!strcmp(tmp_entry->target_pathname, info.target_pathname)) {
+		if (!strcmp(tmp_entry->target_pathname, info.target_pathname)) {
 			hash_del(&tmp_entry->node);
 			kfree(tmp_entry);
 			update_hlist = true;
@@ -107,17 +110,17 @@ int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info) {
 		return 1;
 	}
 
-	new_entry->target_ino = info.target_ino;
-	strncpy(new_entry->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME-1);
-	if (susfs_update_sus_path_inode(new_entry->target_pathname)) {
+	if (susfs_update_sus_path_inode(info.target_pathname, &info.target_ino)) {
 		kfree(new_entry);
 		return 1;
 	}
+	new_entry->target_ino = info.target_ino;
+	strncpy(new_entry->target_pathname, info.target_pathname, SUSFS_MAX_LEN_PATHNAME-1);
 	spin_lock(&susfs_spin_lock);
-	hash_add(SUS_PATH_HLIST, &new_entry->node, info.target_ino);
+	hash_add(SUS_PATH_HLIST, &new_entry->node, new_entry->target_ino);
 	if (update_hlist) {
 		SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s' is successfully updated to SUS_PATH_HLIST\n",
-				new_entry->target_ino, new_entry->target_pathname);	
+				new_entry->target_ino, new_entry->target_pathname);
 	} else {
 		SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s' is successfully added to SUS_PATH_HLIST\n",
 				new_entry->target_ino, new_entry->target_pathname);
@@ -339,16 +342,40 @@ static int susfs_update_sus_kstat_inode(char *target_pathname) {
 	return 0;
 }
 
-int susfs_add_sus_kstat(struct st_susfs_sus_kstat* __user user_info) {
+int susfs_add_sus_kstat(void __user *user_info) {
+	struct susfs_uapi_sus_kstat uinfo;
 	struct st_susfs_sus_kstat info;
 	struct st_susfs_sus_kstat_hlist *new_entry, *tmp_entry;
 	struct hlist_node *tmp_node;
 	int bkt;
 	bool update_hlist = false;
 
-	if (copy_from_user(&info, user_info, sizeof(info))) {
+	if (copy_from_user(&uinfo, user_info, sizeof(uinfo))) {
 		SUSFS_LOGE("failed copying from userspace\n");
 		return 1;
+	}
+	memset(&info, 0, sizeof(info));
+	info.is_statically = (int)uinfo.is_statically;
+	info.target_ino = (unsigned long)uinfo.target_ino;
+	strncpy(info.target_pathname, uinfo.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	info.spoofed_ino = (unsigned long)uinfo.spoofed_ino;
+	info.spoofed_dev = (unsigned long)uinfo.spoofed_dev;
+	info.spoofed_nlink = (unsigned int)uinfo.spoofed_nlink;
+	info.spoofed_size = (long long)uinfo.spoofed_size;
+	info.spoofed_atime_tv_sec = (long)uinfo.spoofed_atime_tv_sec;
+	info.spoofed_mtime_tv_sec = (long)uinfo.spoofed_mtime_tv_sec;
+	info.spoofed_ctime_tv_sec = (long)uinfo.spoofed_ctime_tv_sec;
+	info.spoofed_atime_tv_nsec = (long)uinfo.spoofed_atime_tv_nsec;
+	info.spoofed_mtime_tv_nsec = (long)uinfo.spoofed_mtime_tv_nsec;
+	info.spoofed_ctime_tv_nsec = (long)uinfo.spoofed_ctime_tv_nsec;
+	info.spoofed_blksize = (unsigned long)uinfo.spoofed_blksize;
+	info.spoofed_blocks = (unsigned long long)uinfo.spoofed_blocks;
+	if (!info.target_ino) {
+		struct path p;
+		if (!kern_path(info.target_pathname, LOOKUP_FOLLOW, &p)) {
+			info.target_ino = d_inode(p.dentry) ? d_inode(p.dentry)->i_ino : 0;
+			path_put(&p);
+		}
 	}
 
 	if (strlen(info.target_pathname) == 0) {
@@ -434,16 +461,29 @@ int susfs_add_sus_kstat(struct st_susfs_sus_kstat* __user user_info) {
 	return 0;
 }
 
-int susfs_update_sus_kstat(struct st_susfs_sus_kstat* __user user_info) {
+int susfs_update_sus_kstat(void __user *user_info) {
+	struct susfs_uapi_sus_kstat uinfo;
 	struct st_susfs_sus_kstat info;
 	struct st_susfs_sus_kstat_hlist *new_entry, *tmp_entry;
 	struct hlist_node *tmp_node;
 	int bkt;
 	int err = 0;
 
-	if (copy_from_user(&info, user_info, sizeof(info))) {
+	if (copy_from_user(&uinfo, user_info, sizeof(uinfo))) {
 		SUSFS_LOGE("failed copying from userspace\n");
 		return 1;
+	}
+	memset(&info, 0, sizeof(info));
+	info.target_ino = (unsigned long)uinfo.target_ino;
+	strncpy(info.target_pathname, uinfo.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	info.spoofed_size = (long long)uinfo.spoofed_size;
+	info.spoofed_blocks = (unsigned long long)uinfo.spoofed_blocks;
+	if (!info.target_ino) {
+		struct path p;
+		if (!kern_path(info.target_pathname, LOOKUP_FOLLOW, &p)) {
+			info.target_ino = d_inode(p.dentry) ? d_inode(p.dentry)->i_ino : 0;
+			path_put(&p);
+		}
 	}
 
 	spin_lock(&susfs_spin_lock);
@@ -768,6 +808,7 @@ static int susfs_update_open_redirect_inode(struct st_susfs_open_redirect_hlist 
 		goto out_path_put_target;
 	}
 
+	new_entry->target_ino = inode_target->i_ino;
 	spin_lock(&inode_target->i_lock);
 	inode_target->i_state |= INODE_STATE_OPEN_REDIRECT;
 	spin_unlock(&inode_target->i_lock);
@@ -777,17 +818,21 @@ out_path_put_target:
 	return err;
 }
 
-int susfs_add_open_redirect(struct st_susfs_open_redirect* __user user_info) {
+int susfs_add_open_redirect(void __user *user_info) {
+	struct susfs_uapi_open_redirect uinfo;
 	struct st_susfs_open_redirect info;
 	struct st_susfs_open_redirect_hlist *new_entry, *tmp_entry;
 	struct hlist_node *tmp_node;
 	int bkt;
 	bool update_hlist = false;
 
-	if (copy_from_user(&info, user_info, sizeof(info))) {
+	if (copy_from_user(&uinfo, user_info, sizeof(uinfo))) {
 		SUSFS_LOGE("failed copying from userspace\n");
 		return 1;
 	}
+	memset(&info, 0, sizeof(info));
+	strncpy(info.target_pathname, uinfo.target_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
+	strncpy(info.redirected_pathname, uinfo.redirected_pathname, SUSFS_MAX_LEN_PATHNAME - 1);
 
 	spin_lock(&susfs_spin_lock);
 	hash_for_each_safe(OPEN_REDIRECT_HLIST, bkt, tmp_node, tmp_entry, node) {
@@ -816,7 +861,7 @@ int susfs_add_open_redirect(struct st_susfs_open_redirect* __user user_info) {
 	}
 
 	spin_lock(&susfs_spin_lock);
-	hash_add(OPEN_REDIRECT_HLIST, &new_entry->node, info.target_ino);
+	hash_add(OPEN_REDIRECT_HLIST, &new_entry->node, new_entry->target_ino);
 	if (update_hlist) {
 		SUSFS_LOGI("target_ino: '%lu', target_pathname: '%s', redirected_pathname: '%s', is successfully updated to OPEN_REDIRECT_HLIST\n",
 				new_entry->target_ino, new_entry->target_pathname, new_entry->redirected_pathname);	

@@ -8,6 +8,8 @@
 #include <linux/path.h>
 #include <linux/susfs_def.h>
 
+struct kstat;
+
 #define SUSFS_VERSION "v1.5.5"
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,0,0)
 #define SUSFS_VARIANT "NON-GKI"
@@ -24,6 +26,63 @@
 /**********/
 /* STRUCT */
 /**********/
+
+/* ---- SukiSU-Ultra ksud UAPI (userspace/ksud/src/susfs/abi/types.rs) ---- */
+#define SUSFS_UAPI_MAX_PATHNAME 256
+#define SUSFS_UAPI_NEW_UTS_LEN 64
+#define SUSFS_UAPI_FAKE_CMDLINE_SIZE 8192
+#define SUSFS_UAPI_ENABLED_FEATURES_SIZE 8192
+#define SUSFS_UAPI_MAX_VERSION 16
+#define SUSFS_UAPI_MAX_VARIANT 16
+
+struct susfs_uapi_sus_path {
+	char	target_pathname[SUSFS_UAPI_MAX_PATHNAME];
+	s32	err;
+};
+
+struct susfs_uapi_sus_kstat {
+	u32	is_statically;
+	u64	target_ino;
+	char	target_pathname[SUSFS_UAPI_MAX_PATHNAME];
+	u64	spoofed_ino;
+	u64	spoofed_dev;
+	u32	spoofed_nlink;
+	u64	spoofed_size;
+	s64	spoofed_atime_tv_sec;
+	u64	spoofed_atime_tv_nsec;
+	s64	spoofed_mtime_tv_sec;
+	u64	spoofed_mtime_tv_nsec;
+	s64	spoofed_ctime_tv_sec;
+	u64	spoofed_ctime_tv_nsec;
+	u64	spoofed_blocks;
+	s64	spoofed_blksize;
+	u32	flags;
+	s32	err;
+};
+
+struct susfs_uapi_open_redirect {
+	char	target_pathname[SUSFS_UAPI_MAX_PATHNAME];
+	char	redirected_pathname[SUSFS_UAPI_MAX_PATHNAME];
+	u32	uid_scheme;
+	s32	err;
+};
+
+struct susfs_uapi_uname {
+	char	release[SUSFS_UAPI_NEW_UTS_LEN + 1];
+	char	version[SUSFS_UAPI_NEW_UTS_LEN + 1];
+	s32	err;
+};
+
+struct susfs_uapi_u32 {
+	u32	enabled;
+	s32	err;
+};
+
+struct susfs_uapi_cmdline {
+	char	fake_cmdline_or_bootconfig[SUSFS_UAPI_FAKE_CMDLINE_SIZE];
+	s32	err;
+};
+
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 struct st_susfs_sus_path {
@@ -127,7 +186,7 @@ struct st_sus_su {
 /***********************/
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
-int susfs_add_sus_path(struct st_susfs_sus_path* __user user_info);
+int susfs_add_sus_path(void __user *user_info);
 int susfs_sus_ino_for_filldir64(unsigned long ino);
 #endif
 /* sus_mount */
@@ -143,8 +202,8 @@ void susfs_auto_add_sus_ksu_default_mount(const char __user *to_pathname);
 
 /* sus_kstat */
 #ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
-int susfs_add_sus_kstat(struct st_susfs_sus_kstat* __user user_info);
-int susfs_update_sus_kstat(struct st_susfs_sus_kstat* __user user_info);
+int susfs_add_sus_kstat(void __user *user_info);
+int susfs_update_sus_kstat(void __user *user_info);
 void susfs_sus_ino_for_generic_fillattr(unsigned long ino, struct kstat *stat);
 void susfs_sus_ino_for_show_map_vma(unsigned long ino, dev_t *out_dev, unsigned long *out_ino);
 #endif
@@ -172,7 +231,7 @@ int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m);
 #endif
 /* open_redirect */
 #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
-int susfs_add_open_redirect(struct st_susfs_open_redirect* __user user_info);
+int susfs_add_open_redirect(void __user *user_info);
 struct filename* susfs_get_redirected_path(unsigned long ino);
 #endif
 /* sus_su */

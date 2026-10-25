@@ -8,6 +8,13 @@
 /********/
 /* shared with userspace ksu_susfs tool */
 #define CMD_SUSFS_ADD_SUS_PATH 0x55550
+/* SukiSU-Ultra ksud ABI (userspace/ksud/src/susfs/abi/consts.rs). */
+#define SUSFS_MAGIC 0xFAFAFAFA
+#define CMD_SUSFS_ADD_SUS_PATH_LOOP 0x55553
+#define CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS 0x55561
+#define CMD_SUSFS_HIDE_SUS_MOUNTS_FOR_NON_SU_PROCS 0x55561
+#define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
+#define CMD_SUSFS_ADD_SUS_MAP 0x60020
 #define CMD_SUSFS_ADD_SUS_MOUNT 0x55560
 #define CMD_SUSFS_ADD_SUS_KSTAT 0x55570
 #define CMD_SUSFS_UPDATE_SUS_KSTAT 0x55571
@@ -26,7 +33,7 @@
 #define CMD_SUSFS_SUS_SU 0x60000
 
 #define SUSFS_MAX_LEN_PATHNAME 256 // 256 should address many paths already unless you are doing some strange experimental stuff, then set your own desired length
-#define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 4096
+#define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
 
 #define TRY_UMOUNT_DEFAULT 0 /* used by susfs_try_umount() */
 #define TRY_UMOUNT_DETACH 1 /* used by susfs_try_umount() */

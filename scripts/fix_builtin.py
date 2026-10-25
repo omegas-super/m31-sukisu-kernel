@@ -75,11 +75,6 @@ FIXES = [
         "bool ksu_module_mounted __read_mostly = false;",
     ),
     (
-        "sulog/event.c",
-        "    #define USER_ARG_NULL user_arg_null_ptr()",
-        "    #define USER_ARG_NULL (*user_arg_null_ptr())",
-    ),
-    (
         "selinux/rules.c",
         "    struct selinux_policy *pol, *old_pol;\n"
         "    struct policydb *db;",
@@ -176,6 +171,44 @@ def fix_access_ok(root_path: Path) -> None:
         print(f"patched: {path}: access_ok -> ksu_access_ok")
 
 
+
+def fix_susfs_dispatch(root_path: Path) -> None:
+    """ksud passes a void __user * payload; dispatch receives void __user **."""
+    path = root_path / "supercall" / "dispatch.c"
+    text = path.read_text(encoding="utf-8")
+    if "susfs_arg" in text:
+        return
+    NL = chr(10)
+    anchor = "    if (magic2 == SUSFS_MAGIC && current_uid().val == 0) {" + NL
+    if anchor not in text:
+        print(f"skip: {path}: susfs dispatch anchor missing")
+        return
+    inject = anchor + (
+        "        void __user *susfs_arg = arg ? (void __user *)*arg : NULL;" + NL + NL
+        + "        if (!susfs_arg)" + NL
+        + "            return -EINVAL;" + NL
+    )
+    text = text.replace(anchor, inject, 1)
+    for fn in (
+        "susfs_add_sus_path",
+        "susfs_add_sus_path_loop",
+        "susfs_set_hide_sus_mnts_for_non_su_procs",
+        "susfs_add_sus_kstat",
+        "susfs_update_sus_kstat",
+        "susfs_set_uname",
+        "susfs_enable_log",
+        "susfs_set_cmdline_or_bootconfig",
+        "susfs_add_open_redirect",
+        "susfs_add_sus_map",
+        "susfs_set_avc_log_spoofing",
+        "susfs_get_enabled_features",
+        "susfs_show_variant",
+        "susfs_show_version",
+    ):
+        text = text.replace(f"{fn}(arg)", f"{fn}(susfs_arg)")
+    path.write_text(text, encoding="utf-8")
+    print(f"patched: {path}: susfs dispatch arg deref")
+
 def main(root: str) -> int:
     root_path = Path(root)
     for rel, old, new in FIXES:
@@ -189,6 +222,7 @@ def main(root: str) -> int:
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
         print(f"patched: {path}: {old}")
     stub_cpu_spoof(root_path)
+    fix_susfs_dispatch(root_path)
     fix_access_ok(root_path)
     return 0
 
