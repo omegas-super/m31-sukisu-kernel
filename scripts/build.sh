@@ -7,8 +7,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/Parbindar7/android_kernel_samsung_universal9611.git}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-24.0}"
+KERNEL_SHA="${KERNEL_SHA:-37341a80d83cfc71105eb80a3d56d403cf64a62d}"
 SUKISU_REPO="${SUKISU_REPO:-https://github.com/SukiSU-Ultra/SukiSU-Ultra.git}"
 SUKISU_BRANCH="${SUKISU_BRANCH:-builtin}"
+SUKISU_SHA="${SUKISU_SHA:-ce75122bec7423e0f1fa06e3e9a174085c5231ab}"
 WORK="${WORK:-$PWD/work}"
 
 log() { printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -19,6 +21,12 @@ cd "$WORK"
 if [ ! -d kernel/.git ]; then
   log "Cloning $KERNEL_REPO ($KERNEL_BRANCH)"
   git clone --depth 1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel
+fi
+
+if [ -n "${KERNEL_SHA:-}" ]; then
+  log "Pinning kernel to $KERNEL_SHA"
+  git -C kernel fetch --depth 1 origin "$KERNEL_SHA" || true
+  git -C kernel checkout "$KERNEL_SHA"
 fi
 
 cd kernel
@@ -49,7 +57,11 @@ fi
 if [ "$MODE" != "stock" ]; then
   log "Vendoring SukiSU ($SUKISU_BRANCH) into drivers/kernelsu"
   if [ ! -d "$WORK/sukisu/.git" ]; then
-    git clone --depth 1 -b "$SUKISU_BRANCH" "$SUKISU_REPO" "$WORK/sukisu"
+    git clone -b "$SUKISU_BRANCH" --single-branch "$SUKISU_REPO" "$WORK/sukisu"
+  fi
+  if [ -n "${SUKISU_SHA:-}" ]; then
+    log "Pinning SukiSU to $SUKISU_SHA"
+    git -C "$WORK/sukisu" checkout "$SUKISU_SHA"
   fi
   rm -rf drivers/kernelsu
   mkdir -p drivers/kernelsu

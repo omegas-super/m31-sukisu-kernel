@@ -53,6 +53,41 @@ FIXES = [
         "#endif\n"
         "#endif",
     ),
+    (
+        "extension/kpm/super_access.c",
+        "#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)\n"
+        "DEFINE_MEMBER(task_struct, pids[PIDTYPE_PID].pid)\n"
+        "#else\n"
+        "DEFINE_MEMBER(task_struct, thread_pid)\n"
+        "#endif",
+        "DEFINE_MEMBER(task_struct, thread_pid)",
+    ),
+    (
+        "policy/feature.c",
+        "static const struct ksu_feature_handler *feature_handlers[KSU_FEATURE_MAX];",
+        "#include <uapi/feature.h>\n\n"
+        "static const struct ksu_feature_handler *feature_handlers[KSU_FEATURE_MAX];",
+    ),
+    (
+        "runtime/ksud.c",
+        "bool ksu_module_mounted __read_mostly = false;",
+        "#include \"feature/selinux_hide.h\"\n\n"
+        "bool ksu_module_mounted __read_mostly = false;",
+    ),
+    (
+        "sulog/event.c",
+        "    #define USER_ARG_NULL user_arg_null_ptr()",
+        "    #define USER_ARG_NULL (*user_arg_null_ptr())",
+    ),
+    (
+        "selinux/rules.c",
+        "    struct selinux_policy *pol, *old_pol;\n"
+        "    struct policydb *db;",
+        "    struct selinux_policy *pol, *old_pol;\n"
+        "    struct policydb *db;\n"
+        "    (void)pol;\n"
+        "    (void)old_pol;",
+    ),
 ]
 
 
@@ -60,7 +95,7 @@ def stub_cpu_spoof(root_path: Path) -> None:
     path = root_path / "extension/cpu_spoof.c"
     if not path.exists():
         sys.exit(f"missing file: {path}")
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if "LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)" in text:
         print(f"skip (already stubbed): {path}")
         return
@@ -80,7 +115,7 @@ def stub_cpu_spoof(root_path: Path) -> None:
     )
     text = text.replace(marker, stub + marker, 1)
     text = text.rstrip() + "\n#endif /* LINUX_VERSION_CODE < 5.10 */\n"
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     print(f"patched: {path}: cpu_spoof 4.14 stub")
 
 
@@ -88,7 +123,7 @@ def fix_access_ok(root_path: Path) -> None:
     compat = root_path / "kernel_compat.h"
     if not compat.exists():
         sys.exit(f"missing file: {compat}")
-    text = compat.read_text()
+    text = compat.read_text(encoding="utf-8")
     if "ksu_access_ok" not in text:
         text += (
             "\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)\n"
@@ -97,13 +132,13 @@ def fix_access_ok(root_path: Path) -> None:
             "#define ksu_access_ok(addr, size) access_ok((addr), (size))\n"
             "#endif\n"
         )
-        compat.write_text(text)
+        compat.write_text(text, encoding="utf-8")
         print(f"patched: {compat}: ksu_access_ok")
     for path in sorted((root_path / "extension/kpm").glob("*.c")):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "access_ok(" not in text:
             continue
-        path.write_text(text.replace("access_ok(", "ksu_access_ok("))
+        path.write_text(text.replace("access_ok(", "ksu_access_ok("), encoding="utf-8")
         print(f"patched: {path}: access_ok -> ksu_access_ok")
 
 
@@ -113,11 +148,11 @@ def main(root: str) -> int:
         path = root_path / rel
         if not path.exists():
             sys.exit(f"missing file: {path}")
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if old not in text:
             print(f"skip (already fixed or absent): {path}: {old}")
             continue
-        path.write_text(text.replace(old, new, 1))
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
         print(f"patched: {path}: {old}")
     stub_cpu_spoof(root_path)
     fix_access_ok(root_path)
