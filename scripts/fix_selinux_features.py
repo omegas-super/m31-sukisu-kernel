@@ -92,6 +92,7 @@ KERNEL_SOURCE = r"""// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/mutex.h>
 #include <linux/printk.h>
+#include <linux/ratelimit.h>
 #include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -303,10 +304,8 @@ void ksu_selinux_hide_transaction_post(struct file *file, unsigned long ino,
 				       const char *req, size_t size)
 {
 	struct simple_transaction_argresp *ar;
-	char scon[128], tcon[128], tmp[96];
-	unsigned int tclass;
-	unsigned int allowed, ff, auditallow, auditdeny, seqno, flags;
-	bool deny = false;
+	char reqbuf[256];
+	char *scon, *tcon, *sp;
 	int n;
 
 	if (!ksu_selinux_hide_on || !ksu_is_app_uid())
@@ -314,34 +313,33 @@ void ksu_selinux_hide_transaction_post(struct file *file, unsigned long ino,
 	if (ino != KSU_SEL_ACCESS_INO || !file || !req)
 		return;
 
-	if (sscanf(req, "%127s %127s %u", scon, tcon, &tclass) != 3)
-		return;
-	(void)tclass;
+	/* request format: "<scon> <tcon> <tclass>" */
+	if (size >= sizeof(reqbuf))
+		size = sizeof(reqbuf) - 1;
+	memcpy(reqbuf, req, size);
+	reqbuf[size] = '\0';
 
-	if (ksu_context_is_dirty(scon) || ksu_context_is_dirty(tcon))
-		deny = true;
-	if (!deny)
+	scon = reqbuf;
+	sp = strchr(scon, ' ');
+	if (!sp)
+		return;
+	*sp++ = '\0';
+	tcon = sp;
+	sp = strchr(tcon, ' ');
+	if (sp)
+		*sp = '\0';
+
+	if (!ksu_context_is_dirty(scon) && !ksu_context_is_dirty(tcon))
 		return;
 
 	ar = file->private_data;
 	if (!ar)
 		return;
 
-	if (sscanf(ar->data, "%x %x %x %x %u %x",
-		   &allowed, &ff, &auditallow, &auditdeny, &seqno, &flags) != 6)
-		return;
-
-	allowed = 0;
-	ff = 0xffffffff;
-	auditallow = 0;
-	auditdeny = 0xffffffff;
-	flags = 0;
-	seqno = 1;
-
-	n = scnprintf(tmp, sizeof(tmp), "%x %x %x %x %u %x",
-		      allowed, ff, auditallow, auditdeny, seqno, flags);
-	if (n > 0 && n < (int)SIMPLE_TRANSACTION_LIMIT) {
-		memcpy(ar->data, tmp, n);
+	/* answer as a stock policy would: no permissions, deny audit */
+	n = scnprintf(ar->data, SIMPLE_TRANSACTION_LIMIT,
+		      "%x %x %x %x %u %x", 0, 0xffffffff, 0, 0xffffffff, 1, 0);
+	if (n > 0) {
 		ar->data[n] = '\0';
 		ar->size = n;
 	}
