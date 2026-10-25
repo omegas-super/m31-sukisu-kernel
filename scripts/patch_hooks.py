@@ -20,8 +20,8 @@ MODE = sys.argv[2] if len(sys.argv) > 2 else "ksu"
 PATCHES = [
     {
         "file": "fs/exec.c",
-        "anchor": "static int do_execveat_common(int fd, struct filename *filename,",
-        "call_anchor": "\treturn __do_execve_file(fd, filename, argv, envp, flags, NULL);",
+        "anchor": "static int __do_execve_file(int fd, struct filename *filename,",
+        "call_anchor": "\tif (IS_ERR(filename))",
         "decl": "extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);",
         "call": "\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);",
         "marker": "ksu_handle_execveat(&fd",
@@ -57,6 +57,14 @@ PATCHES = [
         "decl": "extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);",
         "call": "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);",
         "marker": "ksu_handle_sys_reboot(magic1",
+    },
+    {
+        "file": "drivers/input/input.c",
+        "anchor": "static void input_handle_event(struct input_dev *dev,",
+        "call_after": "\tint disposition = input_get_disposition(dev, type, code, &value);\n",
+        "decl": "extern bool ksu_input_hook __read_mostly;\nextern int ksu_handle_input_handle_event(unsigned int *type, unsigned int *code, int *value);",
+        "call": "\tif (unlikely(ksu_input_hook))\n\t\tksu_handle_input_handle_event(&type, &code, &value);",
+        "marker": "ksu_handle_input_handle_event(&type",
     },
 ]
 
