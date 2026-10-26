@@ -1,8 +1,9 @@
 # m31-sukisu-kernel
 
 GitHub Actions build for the Exynos 9611 (**Galaxy M31 / `m31`**) LineageOS 24.0 kernel with
-**SukiSU-Ultra** (`builtin` branch, manual hooks), **SUSFS v1.5.5** (4.14 port) and an optional
-**Performance Edition**.
+**SukiSU-Ultra** (`builtin` branch at `6397fcb5`, manual hooks), **SUSFS v1.5.5** (4.14 port) and an
+optional **Performance Edition**.  It also backports the SUSFS 2.x **priority-UID filter**, the
+SukiSU **SELinux-hide / AVC-spoof** features, and a kernel-level **bootloader-locked spoof**.
 
 The runner clones the upstream kernel
 [`Parbindar7/android_kernel_samsung_universal9611`](https://github.com/Parbindar7/android_kernel_samsung_universal9611)
@@ -50,6 +51,17 @@ Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification
   `fs/proc/base.c`, adds `security/selinux/ksu_selinux_hide.c`, and registers both feature handlers
   in the KernelSU tree. The SUSFS `CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING` command drives the same
   toggle.
+- `scripts/fix_best_spoof.py` — **bootloader-locked / verified-boot spoof** and the syscall hooks
+  for the **priority-UID filter**:
+  - new `fs/ksu_boot_spoof.c` rewrites `androidboot.verifiedbootstate=green`,
+    `androidboot.flash.locked=1`, `androidboot.vbmeta.device_state=locked`,
+    `androidboot.warranty_bit=0` (and `warranty_bit=0`) in `/proc/cmdline` before init derives
+    `ro.boot.*` from it, and in the DT `/chosen/bootargs` property.  The real AVB decision is
+    untouched; boot-critical tokens (`veritymode`, vbmeta metadata) are deliberately left to the
+    manager's hide-BL userspace script.  Opt out with the `ksu_nobootspoof` kernel cmdline token.
+  - adds the `getpriority`/`setpriority`/`ioprio_set`/`ioprio_get` hooks used by the SUSFS 2.x
+    **priority-UID filter** (the filter itself lives in `fs/susfs_compat.c`; userspace ABI
+    `CMD_SUSFS_SET_PRIORITY_UID_FILTER = 0x60030`, SukiSU manager's "Priority UID filter" tab).
 
 ## Layout
 
