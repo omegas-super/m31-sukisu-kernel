@@ -24,6 +24,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>
+#include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/user_namespace.h>
 #include <linux/susfs.h>
