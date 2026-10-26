@@ -140,7 +140,9 @@ if [ "$MODE" != "stock" ]; then
 fi
 
 # Performance tuning is opt-in: the workflow passes PERF_TUNE=1/0.
-if [ "$MODE" != "stock" ] && [ "${PERF_TUNE:-0}" = "1" ]; then
+# It is also allowed in stock mode so a "pure GPU/CPU tuning, no root"
+# build can be produced for A/B testing.
+if [ "${PERF_TUNE:-0}" = "1" ]; then
   log "Applying M31 performance tuning"
   python3 "$SCRIPT_DIR/perf_tune.py" "$PWD"
 fi

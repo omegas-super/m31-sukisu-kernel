@@ -56,7 +56,10 @@ BOOT_SPOOF_C = r"""// SPDX-License-Identifier: GPL-2.0-only
  * /proc/device-tree/chosen/bootargs cannot leak the real state.
  *
  * The real bootloader/AVB decision is untouched; this only changes what the
- * running OS reports.  Disable with the `ksu_nobootspoof` kernel cmdline token.
+ * running OS reports.  DISABLED BY DEFAULT: spoofing the cmdline before init
+ * derives ro.boot.* from it was implicated in the 2026-10-26 bootloop report,
+ * so it is opt-in via the `ksu_bootspoof` kernel cmdline token.  The manager's
+ * Shamiko-derived "Hide BL script" remains the safe default for ro.boot.*.
  */
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -72,7 +75,7 @@ BOOT_SPOOF_C = r"""// SPDX-License-Identifier: GPL-2.0-only
 
 #define KSU_BOOT_SPOOF_MAX_LEN	8192
 
-static bool ksu_boot_spoof_enabled __read_mostly = true;
+static bool ksu_boot_spoof_enabled __read_mostly;
 static char *ksu_boot_spoof_buf;
 static DEFINE_MUTEX(ksu_boot_spoof_mutex);
 
@@ -100,10 +103,10 @@ static const struct ksu_boot_spoof_token ksu_boot_spoof_tokens[] = {
 
 static int __init ksu_boot_spoof_setup(char *str)
 {
-	ksu_boot_spoof_enabled = false;
+	ksu_boot_spoof_enabled = true;
 	return 1;
 }
-__setup("ksu_nobootspoof", ksu_boot_spoof_setup);
+__setup("ksu_bootspoof", ksu_boot_spoof_setup);
 
 static char *ksu_boot_spoof_build(const char *cmdline)
 {
