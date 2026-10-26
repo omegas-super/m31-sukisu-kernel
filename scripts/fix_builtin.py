@@ -417,6 +417,37 @@ def fix_user_arg_null(root_path: Path) -> None:
     print(f"patched: {path}: USER_ARG_NULL -> (*user_arg_null_ptr()) (non-SUSFS mode)")
 
 
+def fix_susfs_new_symbols(root_path: Path) -> None:
+    """Guard new SUSFS-2.x-only calls so mode=ksu still compiles.
+
+    The current `builtin` branch calls susfs_parse_priority_app_strings()
+    unconditionally from manager/pkg_observer.c.  In mode=ksu
+    (CONFIG_KSU_SUSFS=n) the SUSFS kernel sources are not built, so the call
+    would be an implicit declaration plus an undefined symbol.  SUSFS mode
+    keeps the call (fs/susfs_compat.c provides it).
+    """
+    path = root_path / "manager" / "pkg_observer.c"
+    if not path.exists():
+        print(f"skip (absent): {path}: priority-filter refresh call")
+        return
+    text = path.read_text(encoding="utf-8")
+    old = (
+        "    // Renew the getpriority uid bitmap filter\n"
+        "    susfs_parse_priority_app_strings();\n"
+    )
+    new = (
+        "#ifdef CONFIG_KSU_SUSFS\n"
+        "    // Renew the getpriority uid bitmap filter\n"
+        "    susfs_parse_priority_app_strings();\n"
+        "#endif\n"
+    )
+    if old not in text:
+        print(f"skip (already fixed or absent): {path}: priority-filter refresh call")
+        return
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    print(f"patched: {path}: guard susfs_parse_priority_app_strings() for mode=ksu")
+
+
 def main(root: str, mode: str = "ksu") -> int:
     root_path = Path(root)
     for rel, old, new in FIXES:
@@ -437,6 +468,7 @@ def main(root: str, mode: str = "ksu") -> int:
     fix_access_ok(root_path)
     fix_susfs_sucompat_abi(root_path)
     fix_susfs_batch_sid(root_path)
+    fix_susfs_new_symbols(root_path)
     if mode == "susfs":
         print("skip: USER_ARG_NULL fix (SUSFS mode takes struct user_arg_ptr *)")
     else:

@@ -2,6 +2,7 @@
 #define KSU_SUSFS_DEF_H
 
 #include <linux/bits.h>
+#include <linux/bitops.h>
 
 /********/
 /* ENUM */
@@ -15,6 +16,7 @@
 #define CMD_SUSFS_HIDE_SUS_MOUNTS_FOR_NON_SU_PROCS 0x55561
 #define CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING 0x60010
 #define CMD_SUSFS_ADD_SUS_MAP 0x60020
+#define CMD_SUSFS_SET_PRIORITY_UID_FILTER 0x60030
 #define CMD_SUSFS_ADD_SUS_MOUNT 0x55560
 #define CMD_SUSFS_ADD_SUS_KSTAT 0x55570
 #define CMD_SUSFS_UPDATE_SUS_KSTAT 0x55571
@@ -34,6 +36,19 @@
 
 #define SUSFS_MAX_LEN_PATHNAME 256 // 256 should address many paths already unless you are doing some strange experimental stuff, then set your own desired length
 #define SUSFS_FAKE_CMDLINE_OR_BOOTCONFIG_SIZE 8192
+
+/*
+ * SukiSU `builtin` compat: SUSFS 2.x priority-UID filter.
+ * The filter hides the process priority/ioprio of the listed app UIDs from
+ * app-UID callers (getpriority/setpriority/ioprio_set/ioprio_get).
+ */
+#define SUSFS_PRIORITY_UID_FILTER_MIN_UID 10000
+#define SUSFS_PRIORITY_UID_FILTER_MAX_UID 19999
+#define SUSFS_PRIORITY_UID_FILTER_UID_NUM \
+	(SUSFS_PRIORITY_UID_FILTER_MAX_UID - SUSFS_PRIORITY_UID_FILTER_MIN_UID + 1)
+#define SUSFS_PRIORITY_UID_FILTER_BITMAP_LEN \
+	BITS_TO_LONGS(SUSFS_PRIORITY_UID_FILTER_UID_NUM)
+#define SUSFS_PRIORITY_UID_FILTER_APP_STR_SIZE 65535
 
 #define TRY_UMOUNT_DEFAULT 0 /* used by susfs_try_umount() */
 #define TRY_UMOUNT_DETACH 1 /* used by susfs_try_umount() */

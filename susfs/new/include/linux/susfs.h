@@ -83,6 +83,12 @@ struct susfs_uapi_cmdline {
 	s32	err;
 };
 
+/* SUSFS 2.x priority-UID filter (SukiSU `builtin` compat) */
+struct st_susfs_priority_uid_filter {
+	char	app_strings[SUSFS_PRIORITY_UID_FILTER_APP_STR_SIZE];
+	int	err;
+};
+
 /* sus_path */
 #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 struct st_susfs_sus_path {
@@ -256,6 +262,10 @@ int susfs_set_hide_sus_mnts_for_non_su_procs(void __user *user_info);
 int susfs_enable_log(void __user *user_info);
 int susfs_add_sus_map(void __user *user_info);
 int susfs_set_avc_log_spoofing(void __user *user_info);
+/* SUSFS 2.x priority-UID filter (backport; see fs/susfs_compat.c) */
+void susfs_set_priority_uid_filter(void __user **user_info);
+void susfs_parse_priority_app_strings(void);
+bool susfs_is_priority_uid_filtered(uid_t uid);
 int susfs_get_enabled_features(void __user *user_info);
 int susfs_show_variant(void __user *user_info);
 int susfs_show_version(void __user *user_info);

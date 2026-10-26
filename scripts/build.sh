@@ -11,7 +11,7 @@ KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-24.0}"
 KERNEL_SHA="${KERNEL_SHA:-37341a80d83cfc71105eb80a3d56d403cf64a62d}"
 SUKISU_REPO="${SUKISU_REPO:-https://github.com/SukiSU-Ultra/SukiSU-Ultra.git}"
 SUKISU_BRANCH="${SUKISU_BRANCH:-builtin}"
-SUKISU_SHA="${SUKISU_SHA:-ce75122bec7423e0f1fa06e3e9a174085c5231ab}"
+SUKISU_SHA="${SUKISU_SHA:-6397fcb5d96e8f4953c71e02c73f8c6800541bff}"
 WORK="${WORK:-$PWD/work}"
 
 log() { printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -130,6 +130,13 @@ if [ "$MODE" = "susfs" ]; then
 elif [ "$MODE" = "ksu" ]; then
   log "Applying SukiSU manual hooks"
   python3 "$SCRIPT_DIR/patch_hooks.py" "$PWD" ksu
+fi
+
+# Best-spoof round: bootloader-locked / verified-boot spoofing (both modes)
+# and the SUSFS 2.x priority-UID filter syscall hooks (susfs mode).
+if [ "$MODE" != "stock" ]; then
+  log "Applying bootloader-locked spoof + priority-UID filter hooks"
+  python3 "$SCRIPT_DIR/fix_best_spoof.py" "$PWD" "$MODE"
 fi
 
 # Performance tuning is opt-in: the workflow passes PERF_TUNE=1/0.
