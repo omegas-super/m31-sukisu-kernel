@@ -33,6 +33,11 @@ on:
         options:
           - "0"
           - "1"
+      sukisu_sha:
+        description: "optional SukiSU builtin commit override (empty = pinned default)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -65,6 +70,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           TARGET: ${{ inputs.target }}
           PERF_TUNE: ${{ inputs.perf }}
+          SUKISU_SHA: ${{ inputs.sukisu_sha }}
         run: bash scripts/build.sh "$MODE" "$TARGET"
 
       - name: Upload flashable zip
