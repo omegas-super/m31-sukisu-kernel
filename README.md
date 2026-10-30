@@ -21,12 +21,27 @@ Actions -> **build-m31** -> *Run workflow*:
 | `mode` | `ksu` | SukiSU `builtin`, root only (no SUSFS) |
 | `mode` | `susfs` | SukiSU `builtin` + SUSFS 4.14 (root + hiding) |
 | `target` | `m31` (default), `m31s`, `a51`, `f41`, `m21` | device |
-| `perf` | `0` (default) / `1` | `1` applies the M31 Performance Edition |
+| `perf` | `0` (default) / `1` / `2` / `3` | performance profile: `0` stock, `1` Performance Edition (safe), `2` Extreme (GPU/CPU OC), `3` MAX 24/7 (top clocks pinned) |
 
-Artifact name: `Everline-AOSP-<target>-<mode>[-perf]`.
+Artifact name: `Everline-AOSP-<target>-<mode>[-perf<N>]`, plus a matching `-raw` artifact containing
+the raw `Image`, `dtb` and `SHA256SUMS` for boot-image patchers (folpatch / Magisk-boot style).
 
-Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification), then
-`mode=susfs, perf=1` as an A/B experiment.
+Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification), then the perf
+profiles one at a time (`perf=1` → `2` → `3`) as A/B experiments.
+
+### Performance profiles
+
+| perf | Name | What changes |
+|---|---|---|
+| `0` | stock | nothing |
+| `1` | Performance Edition (safe) | GPU 1152 MHz row, big floor 1.04 GHz, schedutil + GPU-threshold tuning, BBR + fq |
+| `2` | Extreme | + GPU floor 385 MHz, GPU DVFS polling 5 ms, interactive 949 MHz/90 %, big floor 1.456 GHz, little floor 806 MHz, big/G3D control-temp trips +8 °C |
+| `3` | MAX 24/7 | + CPU floors pinned to the top CAL OPP of both clusters (2.314 / 1.742 GHz), default governor `performance`, GPU floor 546 MHz, control-temp trips +15 °C |
+
+**CPU MHz/voltage is ACPM-firmware-owned** (`cal_id ACPM_DVFS_CPUCL0/1`, no CPU OPP table): profiles
+2/3 pin the CPU *floor* to existing CAL OPPs so the governor cannot scale down — they cannot add MHz
+above the stock top OPP. The GPU 1152 MHz row and all raised thermal trips are ACPM-gated
+experiments.
 
 ## What the scripts do
 
@@ -41,9 +56,14 @@ Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification
   Kconfig lacks (TRY_UMOUNT / auto-add / HAS_MAGIC_MOUNT / SUS_SU) and sets the safe subset in the
   defconfig (`AUTO_ADD_SUS_BIND_MOUNT`, `AUTO_ADD_SUS_KSU_DEFAULT_MOUNT`,
   `HIDE_KSU_SUSFS_SYMBOLS`; TRY_UMOUNT stays off — no drain path on this port).
-- `scripts/perf_tune.py` — opt-in Performance Edition (`perf=1`): valid big-core floor (1040000),
-  schedutil and GPU-threshold tuning, BBR + fq kernel defaults, experimental GPU 1152 MHz row, and
-  two `gpx_clock.c` index guards so an ACPM-rejected GPU row cannot OOB-write at init.
+- `scripts/perf_tune.py` — opt-in performance profiles (`perf=1|2|3`, see the table above). Profile 1
+  is the safe Performance Edition (big-core floor 1040000, schedutil + GPU-threshold tuning, BBR + fq,
+  experimental GPU 1152 MHz row); profile 2 adds a 385 MHz GPU floor, faster GPU DVFS polling,
+  aggressive interactive thresholds, a 1.456 GHz big floor / 806 MHz little floor and +8 °C control
+  temps; profile 3 pins both CPU floors to the top CAL OPP (2314000 / 1742000) with the
+  `performance` governor as default, a 546 MHz GPU floor and +15 °C control temps. Thermal trips are
+  raised brace-scoped per zone, so the little/ISP zones stay stock. Two `gpex_clock.c` index guards
+  keep an ACPM-rejected GPU row from OOB-writing at init.
 - `scripts/fix_selinux_features.py` — ports the two SukiSU manager kernel features that upstream
   only implements for >= 5.10 or via kprobes to this 4.14 tree, without kprobes:
   **`selinux_hide`** (id 4, "hide SELinux modifications") and **`avc_spoof`** (id 10003, "AVC log
@@ -75,8 +95,8 @@ Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification
 | Item | Value |
 |---|---|
 | Kernel | `Parbindar7/android_kernel_samsung_universal9611` @ `37341a80d83cfc71105eb80a3d56d403cf64a62d` (`lineage-24.0`) |
-| SukiSU-Ultra | `builtin` @ `ce75122bec7423e0f1fa06e3e9a174085c5231ab` |
-| SUSFS | `susfs4ksu` `kernel-4.14`, v1.5.5 (NON-GKI) |
+| SukiSU-Ultra | `builtin` @ `b16e899a555e9b96aa1225f049cd7274820ca5b8` |
+| SUSFS | `susfs4ksu` `kernel-4.14`, v1.5.5 (NON-GKI) — unchanged upstream since the tag |
 
 ## Notes
 
@@ -85,5 +105,9 @@ Recommended order: `mode=susfs, perf=0` first (boot + root + hiding verification
 - The zip writes the `boot` partition and replaces its DTB; it does **not** write `dtbo` and does
   **not** patch vbmeta. Match the ROM build to the kernel commit, keep an unlocked bootloader, and
   back up `boot` before flashing.
+- **folpatch / boot-image patchers:** every build also publishes a `-raw` artifact with the raw
+  `Image`, `dtb` and `SHA256SUMS`, so the boot image can be patched instead of flashing the AK3 zip.
+- The kernel-level bootloader spoof is **opt-in** (`ksu_bootspoof` kernel cmdline token, default
+  OFF) after the 2026-10-26 bootloop; the manager's Shamiko-derived Hide BL script is the safe path.
 - Nothing here has been device-verified yet. See the workspace `docs/sukisu/MASTER.md` and
   `docs/sukisu/verification/IMPLEMENTATION_REVIEW.md` for the evidence and the open risks.
