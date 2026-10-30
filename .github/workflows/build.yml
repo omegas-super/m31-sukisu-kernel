@@ -24,7 +24,7 @@ on:
           - f41
           - m21
       perf:
-        description: "apply M31 Performance Edition tuning (1) or keep stock values (0)"
+        description: "performance profile: 0 = stock values, 1 = Performance Edition (safe), 2 = Extreme (GPU/CPU OC), 3 = MAX 24/7 (top clocks pinned)"
         # optional so existing dispatch scripts that only pass mode/target keep working;
         # omitted input resolves to the default "0"
         required: false
@@ -33,6 +33,8 @@ on:
         options:
           - "0"
           - "1"
+          - "2"
+          - "3"
       sukisu_sha:
         description: "optional SukiSU builtin commit override (empty = pinned default)"
         required: false
@@ -76,7 +78,18 @@ jobs:
       - name: Upload flashable zip
         uses: actions/upload-artifact@v4
         with:
-          name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}${{ inputs.perf == '1' && '-perf' || '' }}
+          name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}${{ inputs.perf != '0' && format('-perf{0}', inputs.perf) || '' }}
           path: work/kernel/Everline-AOSP_*.zip
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload raw Image (for folpatch / boot-image patchers)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}${{ inputs.perf != '0' && format('-perf{0}', inputs.perf) || '' }}-raw
+          path: |
+            work/kernel/raw-${{ inputs.target }}/Image
+            work/kernel/raw-${{ inputs.target }}/dtb
+            work/kernel/raw-${{ inputs.target }}/SHA256SUMS
+          if-no-files-found: warn
           retention-days: 14

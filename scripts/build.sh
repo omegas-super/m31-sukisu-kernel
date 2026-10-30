@@ -11,7 +11,7 @@ KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-24.0}"
 KERNEL_SHA="${KERNEL_SHA:-37341a80d83cfc71105eb80a3d56d403cf64a62d}"
 SUKISU_REPO="${SUKISU_REPO:-https://github.com/SukiSU-Ultra/SukiSU-Ultra.git}"
 SUKISU_BRANCH="${SUKISU_BRANCH:-builtin}"
-SUKISU_SHA="${SUKISU_SHA:-6397fcb5d96e8f4953c71e02c73f8c6800541bff}"
+SUKISU_SHA="${SUKISU_SHA:-b16e899a555e9b96aa1225f049cd7274820ca5b8}"
 WORK="${WORK:-$PWD/work}"
 
 log() { printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
@@ -139,12 +139,14 @@ if [ "$MODE" != "stock" ]; then
   python3 "$SCRIPT_DIR/fix_best_spoof.py" "$PWD" "$MODE"
 fi
 
-# Performance tuning is opt-in: the workflow passes PERF_TUNE=1/0.
-# It is also allowed in stock mode so a "pure GPU/CPU tuning, no root"
-# build can be produced for A/B testing.
-if [ "${PERF_TUNE:-0}" = "1" ]; then
-  log "Applying M31 performance tuning"
-  python3 "$SCRIPT_DIR/perf_tune.py" "$PWD"
+# Performance tuning is opt-in: the workflow passes PERF_TUNE=0/1/2/3.
+#   1 = Performance Edition (safe), 2 = Extreme (GPU/CPU OC), 3 = MAX 24/7.
+# It is also allowed in stock mode so a "pure GPU/CPU tuning, no root" build
+# can be produced for A/B testing (and for folpatch users who patch their own
+# boot image with the raw Image).
+if [ "${PERF_TUNE:-0}" != "0" ]; then
+  log "Applying M31 performance tuning (profile ${PERF_TUNE})"
+  python3 "$SCRIPT_DIR/perf_tune.py" "$PWD" --profile "${PERF_TUNE}"
 fi
 
 log "Building target=$TARGET mode=$MODE"
@@ -152,3 +154,19 @@ python3 build_kernel.py --target "$TARGET"
 
 log "Build artifacts"
 ls -l Everline-AOSP_"${TARGET}"_*.zip
+
+# Raw kernel image + DTB for users who patch their own boot image
+# (folpatch / Magisk-boot-style tools) instead of flashing an AnyKernel3 zip.
+# build_kernel.py deletes Image from the AK3 dir after zipping, so copy it from
+# the out dir while it is still there.
+RAW_DIR="raw-${TARGET}"
+mkdir -p "$RAW_DIR"
+cp -f out/arch/arm64/boot/Image "$RAW_DIR/Image" 2>/dev/null || true
+cp -f out/arch/arm64/boot/exynos9611.dtb "$RAW_DIR/dtb" 2>/dev/null || true
+if [ -f "$RAW_DIR/Image" ]; then
+  ( cd "$RAW_DIR" && sha256sum Image dtb > SHA256SUMS 2>/dev/null || true )
+  log "Raw Image for boot-image patchers: $RAW_DIR/"
+  ls -l "$RAW_DIR"
+else
+  log "WARNING: raw Image not found in out/arch/arm64/boot (packaging changed?)"
+fi

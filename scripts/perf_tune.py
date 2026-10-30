@@ -1,46 +1,30 @@
 #!/usr/bin/env python3
-"""M31 / Exynos 9611 "Performance Edition" kernel tuning (opt-in: perf=1).
+"""M31 / Exynos 9611 performance profiles (PERF_TUNE=1|2|3).
 
-Performance Edition: kernel-controllable tuning only. CPU frequency/voltage is
-ACPM firmware-owned; this is not a CPU overclock. GPU +99 MHz is an ACPM-gated
-experiment.
+Three escalating profiles, all kernel-side and ACPM-safe:
 
-CPU DVFS is owned by ACPM firmware (``cal_dfs_set_rate()``, cal-id
-``ACPM_DVFS_CPUCL0``/``ACPM_DVFS_CPUCL1``): the kernel cannot add a CPU OPP,
-a CPU voltage or a CPU clock.  What this script can do is raise the big-cluster
-floor to an existing stock OPP, bias schedutil/freqvar for responsiveness, and
-attempt one GPU row above the stock top (gated by ACPM/CAL at runtime).
+  1  PERFORMANCE EDITION (safe)   -- GPU +99 MHz row, big-core floor at a valid
+                                     stock OPP, schedutil/GPU-threshold tuning,
+                                     BBR + fq.  Thermals untouched.
+  2  EXTREME (OC)                 -- profile 1 plus: higher GPU floor, faster GPU
+                                     DVFS polling, aggressive interactive
+                                     thresholds, higher big/little floors,
+                                     control-temp trips raised ~8 C.
+  3  MAX 24/7                     -- profile 2 plus: CPU floor pinned to the TOP
+                                     CAL OPP of both clusters (2.31 GHz big /
+                                     1.74 GHz little), default governor
+                                     `performance`, GPU floor 546 MHz, control
+                                     temps raised ~15 C.  Sustained top clocks.
 
-The script edits exactly three files under <kernel-root>:
+CPU frequency/voltage itself is ACPM firmware-owned: there is no CPU OPP table,
+no CPU regulator and no `cal_dfs_set_rate()` path in this kernel, so a real
+"more MHz than the top OPP" CPU overclock is impossible.  What these profiles do
+is (a) raise the GPU table by one row above stock, (b) pin the CPU *floor* to the
+highest existing CAL OPP so the governor cannot scale down, and (c) relax the
+thermal control points.  Everything else (scheduler, network, GPU DVFS) is
+tuning, not overclocking.
 
-  arch/arm64/boot/dts/exynos/exynos9610.dts        -- 8 DTS edits
-  arch/arm64/configs/exynos9611-m31_defconfig      -- 4 network edits (BBR + fq)
-  drivers/gpu/arm/exynos/frontend/gpex_clock.c     -- 1 hardening edit
-
-The gpex_clock.c edit is defensive: ``gpex_clock_init_time_in_state()`` indexes
-``clk_info.table[gpex_clock_get_table_idx(gpu_max_clock)]`` and writes through
-it; if ACPM/CAL does not expose the new 1152 MHz row the index is -1 and the
-upstream loop would write ``table[-1]``.  The edit clamps both indices so an
-unsupported overclock row can never corrupt memory at init.
-
-DTS edits use anchors that must occur exactly once; any kernel-tree drift
-aborts the run before either file is written.  The defconfig edits are
-idempotent (an already-applied edit is skipped; a missing anchor whose tuned
-value is also absent aborts loudly), so a re-run on a half-tuned tree is safe.
-
-Deliberately NOT applied (they were dead or invalid in the 6d87180 script):
-
-  * ``gpu_max_clock_limit`` -- the built bv_r38p1 driver takes the limit from
-    CAL (``gpex_clock.c:89``); only the unbuilt b_r16p0 driver reads the DT
-    property, and only with CONFIG_CAL_IF off.
-  * ``gpu_temp_throttling`` -- not parsed by the built bv_r38p1 driver.
-  * ``user-default-qos`` 702000 -> 806000 -- that property sits in a
-    ``cpufreq-domain`` node that exynos-ufc never parses; the live little
-    default is already 806000.
-  * ``1014000`` -- not a big-core OPP (next stock step above 936000 is
-    1040000); an invalid rate would be rejected or rounded by CAL.
-
-usage: python3 perf_tune.py <kernel-root> [--check]
+usage: perf_tune.py <kernel-root> [--profile N] [--check]
 """
 import pathlib
 import sys
@@ -49,9 +33,13 @@ DTS_REL = "arch/arm64/boot/dts/exynos/exynos9610.dts"
 DEFCONFIG_REL = "arch/arm64/configs/exynos9611-m31_defconfig"
 GPEX_REL = "drivers/gpu/arm/exynos/frontend/gpex_clock.c"
 
-# gpex_clock_init_time_in_state() hardening (see the module docstring).  The
-# anchor is the exact upstream block that indexes the CAL-built table with
-# get_table_idx(); a missing clock yields -1 and table[-1] would be written.
+PROFILE_NAMES = {
+    1: "PERFORMANCE EDITION (safe)",
+    2: "EXTREME (GPU/CPU OC)",
+    3: "MAX 24/7 (top clocks pinned)",
+}
+
+# --- gpex_clock.c hardening (needed by every profile that adds a GPU row) ----
 GPEX_ANCHOR = (
     "\tint max_clk_idx = gpex_clock_get_table_idx(clk_info.gpu_max_clock);\n"
     "\tint min_clk_idx = gpex_clock_get_table_idx(clk_info.gpu_min_clock);\n"
@@ -75,10 +63,6 @@ GPEX_FIXED = (
 )
 GPEX_MARKER = "Performance Edition hardening: if ACPM/CAL rejects"
 
-# Second, same-class hardening: gpex_clock_update_time_in_state() also indexes
-# the table with a raw get_table_idx() result; a rejected clock yields -1 and
-# the (level >= idx(max)) && (level <= idx(min)) test can pass when both bounds
-# are -1, writing table[-1].  Skip accounting for an unknown clock instead.
 GPEX_UTIS_ANCHOR = (
     "\tint level = gpex_clock_get_table_idx(clock);\n"
     "\n"
@@ -99,8 +83,8 @@ GPEX_UTIS_FIXED = (
 )
 GPEX_UTIS_MARKER = "skip time-in-state accounting instead of indexing"
 
-# (label, old, new) -- DTS, applied strictly, exactly-once anchors.
-DTS_EDITS = [
+# --- DTS edits shared by every profile --------------------------------------
+DTS_EDITS_BASE = [
     (
         "gpu_dvfs_table_size <11 7> -> <12 7>",
         "gpu_dvfs_table_size = <11 7>",
@@ -118,21 +102,6 @@ DTS_EDITS = [
         "gpu_max_clock = <1152000>",
     ),
     (
-        "gpu interactive_info <764000 75 0> -> <839000 80 0>",
-        "interactive_info = <764000 75 0>",
-        "interactive_info = <839000 80 0>",
-    ),
-    (
-        "big-cluster min-freq 936000 -> 1040000",
-        "min-freq = <936000>",
-        "min-freq = <1040000>",
-    ),
-    (
-        "big-cluster user-default-qos 936000 -> 1040000",
-        "user-default-qos = <936000>;",
-        "user-default-qos = <1040000>;",
-    ),
-    (
         "schedutil big expired_time 80 -> 120 ms",
         "expired_time = <80>;    /* 80ms */",
         "expired_time = <120>;   /* 120ms */",
@@ -144,14 +113,120 @@ DTS_EDITS = [
     ),
 ]
 
-# (label, old, new, applied-markers) -- defconfig, idempotent.
-# NOTE on the qdisc edit: net/sched/Kconfig:349-355 makes DEFAULT_NET_SCH a
-# non-prompt string derived from the "Default queuing discipline" choice, so the
-# canonical symbol to select is CONFIG_DEFAULT_FQ (line 333).  Setting
-# CONFIG_DEFAULT_FQ=y yields CONFIG_DEFAULT_NET_SCH="fq" in the generated
-# .config; writing the derived string directly into a defconfig would be
-# dropped by savedefconfig.
-DEFCONFIG_EDITS = [
+# profile -> list of (label, old, new) applied after DTS_EDITS_BASE
+DTS_EDITS_BY_PROFILE = {
+    1: [
+        (
+            "gpu interactive_info <764000 75 0> -> <839000 80 0>",
+            "interactive_info = <764000 75 0>",
+            "interactive_info = <839000 80 0>",
+        ),
+        (
+            "big-cluster min-freq 936000 -> 1040000",
+            "min-freq = <936000>",
+            "min-freq = <1040000>",
+        ),
+        (
+            "big-cluster user-default-qos 936000 -> 1040000",
+            "user-default-qos = <936000>;",
+            "user-default-qos = <1040000>;",
+        ),
+    ],
+    2: [
+        (
+            "gpu interactive_info <764000 75 0> -> <949000 90 0>",
+            "interactive_info = <764000 75 0>",
+            "interactive_info = <949000 90 0>",
+        ),
+        (
+            "gpu_min_clock 260000 -> 385000",
+            "gpu_min_clock = <260000>",
+            "gpu_min_clock = <385000>",
+        ),
+        (
+            "gpu_dvfs_start_clock 260000 -> 385000",
+            "gpu_dvfs_start_clock = <260000>",
+            "gpu_dvfs_start_clock = <385000>",
+        ),
+        (
+            "gpu_dvfs_bl_config_clock 260000 -> 385000",
+            "gpu_dvfs_bl_config_clock = <260000>",
+            "gpu_dvfs_bl_config_clock = <385000>",
+        ),
+        (
+            "gpu_dvfs_polling_time 10 -> 5",
+            "gpu_dvfs_polling_time = <10>",
+            "gpu_dvfs_polling_time = <5>",
+        ),
+        (
+            "big-cluster min-freq 936000 -> 1456000",
+            "min-freq = <936000>",
+            "min-freq = <1456000>",
+        ),
+        (
+            "little-cluster min-freq 403000 -> 806000",
+            "min-freq = <403000>",
+            "min-freq = <806000>",
+        ),
+        (
+            "big-cluster user-default-qos 936000 -> 1456000",
+            "user-default-qos = <936000>;",
+            "user-default-qos = <1456000>;",
+        ),
+    ],
+    3: [
+        (
+            "gpu interactive_info <764000 75 0> -> <1053000 95 0>",
+            "interactive_info = <764000 75 0>",
+            "interactive_info = <1053000 95 0>",
+        ),
+        (
+            "gpu_min_clock 260000 -> 546000",
+            "gpu_min_clock = <260000>",
+            "gpu_min_clock = <546000>",
+        ),
+        (
+            "gpu_dvfs_start_clock 260000 -> 546000",
+            "gpu_dvfs_start_clock = <260000>",
+            "gpu_dvfs_start_clock = <546000>",
+        ),
+        (
+            "gpu_dvfs_bl_config_clock 260000 -> 546000",
+            "gpu_dvfs_bl_config_clock = <260000>",
+            "gpu_dvfs_bl_config_clock = <546000>",
+        ),
+        (
+            "gpu_dvfs_polling_time 10 -> 5",
+            "gpu_dvfs_polling_time = <10>",
+            "gpu_dvfs_polling_time = <5>",
+        ),
+        (
+            "big-cluster min-freq 936000 -> 2314000 (top CAL OPP)",
+            "min-freq = <936000>",
+            "min-freq = <2314000>",
+        ),
+        (
+            "little-cluster min-freq 403000 -> 1742000 (top CAL OPP)",
+            "min-freq = <403000>",
+            "min-freq = <1742000>",
+        ),
+        (
+            "big-cluster user-default-qos 936000 -> 2314000",
+            "user-default-qos = <936000>;",
+            "user-default-qos = <2314000>;",
+        ),
+    ],
+}
+
+# thermal: (zone marker, delta millicelsius, minimum trip to touch)
+DTS_THERMAL = {
+    1: [],
+    2: [("big_thermal: BIG {", 8000, 83000), ("gpu_thermal: G3D {", 8000, 88000)],
+    3: [("big_thermal: BIG {", 15000, 83000), ("gpu_thermal: G3D {", 15000, 88000)],
+}
+
+# --- defconfig edits --------------------------------------------------------
+DEFCONFIG_NET = [
     (
         "CONFIG_TCP_CONG_BBR=y",
         "# CONFIG_TCP_CONG_BBR is not set",
@@ -178,6 +253,17 @@ DEFCONFIG_EDITS = [
     ),
 ]
 
+# profile 3 only: make `performance` the boot governor so both clusters sit on
+# their top OPP from first boot (belt-and-braces with the pinned floor).
+DEFCONFIG_PERF_GOV = [
+    (
+        "CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y (default governor)",
+        "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y",
+        "CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y",
+        ("CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y",),
+    ),
+]
+
 
 def die(msg):
     raise SystemExit("perf-tune: ABORT: " + msg)
@@ -200,13 +286,70 @@ def write_text(path, text):
 
 def sub_dts(text, old, new, label):
     count = text.count(old)
-    if count != 1:
+    if count == 1:
+        print("  [applied] {}".format(label))
+        return text.replace(old, new, 1)
+    if count == 0 and new in text:
+        print("  [skipped] {} (already applied)".format(label))
+        return text
+    die(
+        "{}: DTS anchor for '{}' found {} time(s), expected exactly 1 "
+        "(kernel-tree drift); no files were written".format(DTS_REL, label, count)
+    )
+
+
+def raise_zone_trips(text, zone_marker, delta, min_temp):
+    """Add `delta` millicelsius to every >= min_temp trip inside one zone.
+
+    Brace-scoped so the little/ISP zones are untouched even though several of
+    them share the same trip temperatures.
+    """
+    start = text.find(zone_marker)
+    if start < 0:
+        die("{}: thermal zone '{}' not found".format(DTS_REL, zone_marker))
+    open_at = text.find("{", start)
+    if open_at < 0:
+        die("{}: thermal zone '{}' has no body".format(DTS_REL, zone_marker))
+    depth = 0
+    end = None
+    for idx in range(open_at, len(text)):
+        ch = text[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = idx + 1
+                break
+    if end is None:
+        die("{}: unbalanced braces in thermal zone '{}'".format(DTS_REL, zone_marker))
+
+    body = text[open_at:end]
+    changed = 0
+
+    def bump(match):
+        nonlocal changed
+        value = int(match.group(1))
+        if value < min_temp:
+            return match.group(0)
+        changed += 1
+        return "temperature = <{}>;".format(value + delta)
+
+    import re
+
+    new_body = re.sub(r"temperature = <(\d+)>;", bump, body)
+    if not changed:
         die(
-            "{}: DTS anchor for '{}' found {} time(s), expected exactly 1 "
-            "(kernel-tree drift); no files were written".format(DTS_REL, label, count)
+            "{}: no trip >= {} mC found in zone '{}'".format(
+                DTS_REL, min_temp, zone_marker
+            )
         )
-    print("  [applied] {}".format(label))
-    return text.replace(old, new, 1)
+    print(
+        "  [applied] {}: {} trips raised by {} mC".format(
+            zone_marker.strip(), changed, delta
+        )
+    )
+    return text[:open_at] + new_body + text[end:]
 
 
 def set_defconfig(text, old, new, markers, label):
@@ -225,8 +368,7 @@ def set_defconfig(text, old, new, markers, label):
     )
 
 
-def validate_gpu_table(text):
-    """Programmatic post-check: 12 rows x 7 cells, 1152 MHz on top."""
+def validate_gpu_table(text, expect_top):
     marker = "gpu_dvfs_table = <"
     start = text.find(marker)
     if start < 0:
@@ -249,29 +391,32 @@ def validate_gpu_table(text):
                     idx, len(cells), cells
                 )
             )
-    if rows[0][0] != 1152000 or rows[1][0] != 1053000:
-        die(
-            "gpu_dvfs_table top rows unexpected: {} / {}".format(rows[0], rows[1])
+    if rows[0][0] != expect_top or rows[1][0] != 1053000:
+        die("gpu_dvfs_table top rows unexpected: {} / {}".format(rows[0], rows[1]))
+    print(
+        "  [verified] gpu_dvfs_table: 12 rows x 7 cells, {} then 1053000".format(
+            expect_top
         )
-    print("  [verified] gpu_dvfs_table: 12 rows x 7 cells, 1152000 then 1053000")
+    )
 
 
-def validate_defconfig(text):
-    required = (
+def validate_defconfig(text, profile):
+    required = [
         "CONFIG_TCP_CONG_BBR=y",
         'CONFIG_DEFAULT_TCP_CONG="bbr"',
         "CONFIG_NET_SCH_FQ=y",
         "CONFIG_NET_SCH_DEFAULT=y",
         "CONFIG_DEFAULT_FQ=y",
-    )
+    ]
+    if profile >= 3:
+        required.append("CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y")
     missing = [line for line in required if line not in text]
     if missing:
         die("defconfig post-check failed, missing: {}".format(", ".join(missing)))
-    print("  [verified] defconfig: BBR default + fq default symbols present")
+    print("  [verified] defconfig: {}".format(", ".join(required)))
 
 
 def patch_gpex_bounds(text):
-    """Clamp the time_in_state indices so a rejected GPU row cannot OOB-write."""
     if GPEX_MARKER in text:
         print("  [skipped] gpex_clock_init_time_in_state() hardening (already applied)")
     else:
@@ -301,29 +446,55 @@ def patch_gpex_bounds(text):
     return text.replace(GPEX_UTIS_ANCHOR, GPEX_UTIS_FIXED, 1)
 
 
-def main(argv):
+def parse_args(argv):
+    profile = 1
     check_only = "--check" in argv
-    args = [arg for arg in argv if not arg.startswith("--")]
-    if len(args) != 1:
-        raise SystemExit("usage: perf_tune.py <kernel-root> [--check]")
+    rest = [arg for arg in argv if not arg.startswith("--")]
+    root = None
+    idx = 0
+    while idx < len(rest):
+        arg = rest[idx]
+        if arg == "profile":
+            idx += 1
+            if idx >= len(rest):
+                raise SystemExit("usage: perf_tune.py <kernel-root> [--profile N] [--check]")
+            profile = int(rest[idx])
+        elif arg.isdigit() and root is not None:
+            profile = int(arg)
+        elif root is None:
+            root = arg
+        idx += 1
+    if root is None:
+        raise SystemExit("usage: perf_tune.py <kernel-root> [--profile N] [--check]")
+    if profile not in PROFILE_NAMES:
+        raise SystemExit("unknown profile {} (expected 1, 2 or 3)".format(profile))
+    return pathlib.Path(root), profile, check_only
 
-    root = pathlib.Path(args[0])
+
+def main(argv):
+    root, profile, check_only = parse_args(argv)
     dts_path = root / DTS_REL
     defconfig_path = root / DEFCONFIG_REL
 
     print("perf-tune: kernel root: {}".format(root))
+    print("perf-tune: profile {} = {}".format(profile, PROFILE_NAMES[profile]))
 
     print("perf-tune: DTS: {}".format(DTS_REL))
     dts_text = read_text(dts_path)
-    for label, old, new in DTS_EDITS:
+    for label, old, new in DTS_EDITS_BASE + DTS_EDITS_BY_PROFILE[profile]:
         dts_text = sub_dts(dts_text, old, new, label)
-    validate_gpu_table(dts_text)
+    validate_gpu_table(dts_text, 1152000)
+    for zone, delta, min_temp in DTS_THERMAL[profile]:
+        dts_text = raise_zone_trips(dts_text, zone, delta, min_temp)
 
     print("perf-tune: defconfig: {}".format(DEFCONFIG_REL))
     defconfig_text = read_text(defconfig_path)
-    for label, old, new, markers in DEFCONFIG_EDITS:
+    edits = list(DEFCONFIG_NET)
+    if profile >= 3:
+        edits += DEFCONFIG_PERF_GOV
+    for label, old, new, markers in edits:
         defconfig_text = set_defconfig(defconfig_text, old, new, markers, label)
-    validate_defconfig(defconfig_text)
+    validate_defconfig(defconfig_text, profile)
 
     print("perf-tune: driver hardening: {}".format(GPEX_REL))
     gpex_text = patch_gpex_bounds(read_text(root / GPEX_REL))
@@ -336,10 +507,13 @@ def main(argv):
     write_text(defconfig_path, defconfig_text)
     write_text(root / GPEX_REL, gpex_text)
     print("perf-tune: wrote 3 files; rebuild required")
-    print("perf-tune: NOTE: CPU frequency/voltage is ACPM firmware-owned (no CPU OC).")
     print(
-        "perf-tune: NOTE: GPU 1152 MHz is an ACPM-gated, on-device-unverified "
-        "experiment."
+        "perf-tune: NOTE: CPU MHz/voltage is ACPM firmware-owned -- profiles 2/3 "
+        "pin the CPU *floor* to existing CAL OPPs, they cannot add MHz."
+    )
+    print(
+        "perf-tune: NOTE: GPU 1152 MHz and the raised thermal trips are "
+        "ACPM-gated, on-device-unverified experiments."
     )
 
 

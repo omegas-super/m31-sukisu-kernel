@@ -399,6 +399,11 @@ def fix_user_arg_null(root_path: Path) -> None:
     (user_arg_null_ptr()), which is a type error.  Dereference it.  SUSFS
     mode takes `struct user_arg_ptr *`, so it must keep the pointer form
     (hence this fixer is skipped for mode=susfs).
+
+    Upstream fixed this itself in `0b666cad` ("fix builtin branch fails to
+    build on 4.14 non-GKI"): the `#define USER_ARG_NULL` hack is gone and the
+    two branches now pass `user_arg_null_ptr()` / `*user_arg_null_ptr()`
+    directly.  When that is the case there is nothing to do.
     """
     path = root_path / "sulog" / "event.c"
     if not path.exists():
@@ -408,6 +413,9 @@ def fix_user_arg_null(root_path: Path) -> None:
     new = "    #define USER_ARG_NULL (*user_arg_null_ptr())"
     if new in text:
         print(f"skip (already fixed): {path}: USER_ARG_NULL")
+        return
+    if old not in text:
+        print(f"skip (upstream-fixed): {path}: USER_ARG_NULL (no #define hack)")
         return
     count = text.count(old)
     if count != 1:
