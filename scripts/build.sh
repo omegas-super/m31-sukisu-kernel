@@ -8,7 +8,7 @@ SUSFS_DIR="$SCRIPT_DIR/../susfs"
 
 KERNEL_REPO="${KERNEL_REPO:-https://github.com/Parbindar7/android_kernel_samsung_universal9611.git}"
 KERNEL_BRANCH="${KERNEL_BRANCH:-lineage-24.0}"
-KERNEL_SHA="${KERNEL_SHA:-37341a80d83cfc71105eb80a3d56d403cf64a62d}"
+KERNEL_SHA="${KERNEL_SHA:-c19ad6b2414e5c110d68ce9cccf1ba95776be317}"
 SUKISU_REPO="${SUKISU_REPO:-https://github.com/SukiSU-Ultra/SukiSU-Ultra.git}"
 SUKISU_BRANCH="${SUKISU_BRANCH:-builtin}"
 SUKISU_SHA="${SUKISU_SHA:-b16e899a555e9b96aa1225f049cd7274820ca5b8}"
@@ -45,6 +45,14 @@ if [ ! -x toolchain/bin/clang ]; then
     else
       echo "ERROR: missing tool $t" >&2
       exit 1
+    fi
+  done
+  # The prebuilt Android clang is a wrapper that execs clang-real next to
+  # itself; through a symlink it looks in toolchain/bin, so link those too.
+  for t in clang-real clang++-real; do
+    if [ ! -e "toolchain/bin/$t" ]; then
+      d="$(dirname "$(command -v clang)")"
+      [ -e "$d/$t" ] && ln -sf "$d/$t" "toolchain/bin/$t"
     fi
   done
 fi
