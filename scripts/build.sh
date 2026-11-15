@@ -161,7 +161,7 @@ log "Building target=$TARGET mode=$MODE"
 python3 build_kernel.py --target "$TARGET"
 
 log "Build artifacts"
-ls -l Everline-*_"${TARGET}"_*.zip 2>/dev/null || true
+ls -l out/Everline-*_"${TARGET}"_*.zip 2>/dev/null || true
 
 # Raw kernel image + DTB for users who patch their own boot image
 # (folpatch / Magisk-boot-style tools) instead of flashing an AnyKernel3 zip.
