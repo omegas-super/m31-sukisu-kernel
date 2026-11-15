@@ -79,7 +79,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Everline-AOSP-${{ inputs.target }}-${{ inputs.mode }}${{ inputs.perf != '0' && format('-perf{0}', inputs.perf) || '' }}
-          path: work/kernel/Everline-AOSP_*.zip
+          path: work/kernel/Everline-*.zip
           if-no-files-found: error
           retention-days: 14
 
